@@ -96,9 +96,9 @@ type AiConversation = {
   summary?: string | null;
 };
 
-type WorkflowStage = "consultation" | "slide_plan" | "generate";
+type WorkflowStage = "consultation" | "visual_direction" | "slide_plan" | "generate";
 type AiMode = "auto" | WorkflowStage;
-type ArtifactType = "brief" | "slide_plan";
+type ArtifactType = "brief" | "visual_direction" | "slide_plan";
 
 type AiArtifact = {
   id: string;
@@ -468,6 +468,10 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       await generateWorkflowArtifact("brief", prompt);
       return;
     }
+    if (mode === "visual_direction") {
+      await generateWorkflowArtifact("visual_direction", prompt);
+      return;
+    }
     if (mode === "slide_plan") {
       await generateWorkflowArtifact("slide_plan", prompt);
       return;
@@ -511,7 +515,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     setWorkflowRun({ type, label: workflowRunLabel(type) });
     setActiveTab("assistant");
     setNotice(`Generating ${artifactLabel(type)}...`);
-    if (type === "slide_plan") setHtmlGenerationRequested(false);
+    if (type === "visual_direction" || type === "slide_plan") setHtmlGenerationRequested(false);
     try {
       if (dirty) await saveFile();
       await apiFetch(`/projects/${projectId}/ai/workflow/artifacts`, {
@@ -542,6 +546,18 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       customPrompt ||
       "Generate the final standalone HTML deck from the current brief and plan. Return complete workspace files for review.";
     await submitAiPrompt(prompt, customPrompt ? undefined : "Generate HTML");
+  }
+
+  async function repairCompileIssue() {
+    if (!canEdit) return;
+    if (aiTask?.status === "running") return;
+    const prompt = `Repair the current HTML deck so it compiles and passes the SlideLeaf quality gate.
+
+Use this compile log as the primary diagnostic source:
+${compileLog}
+
+Return complete replacement workspace files for review. Preserve the chosen deck topic and visual direction, but fix structural HTML, slide framing, navigation, density, viewport, and security issues.`;
+    await submitAiPrompt(prompt, "Repair deck");
   }
 
   async function applyAiTask() {
@@ -750,6 +766,10 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
           previewSrc={previewSrc}
           projectTitle={project?.title ?? "Untitled Presentation"}
           compileStatus={compileJob?.status}
+          compileLog={compileLog}
+          canEdit={canEdit}
+          repairRunning={aiTask?.status === "running"}
+          onRepairCompile={() => void repairCompileIssue()}
         />
       </section>
     </main>
@@ -988,7 +1008,7 @@ function AssistantPane({
   }, [messages.length, lastPrompt, workflowRun?.label, task?.status, error]);
 
   return (
-    <section className="grid h-[calc(100%-44px)] grid-rows-[46px_minmax(0,1fr)_auto] bg-[#eef2f7]">
+    <section className="grid h-[calc(100%-44px)] grid-rows-[46px_minmax(0,1fr)_auto] bg-[#f4f7fb]">
       <div className="flex items-center justify-between border-b border-slate-200 bg-white/95 px-4">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
           <span className="grid h-7 w-7 place-items-center rounded-lg bg-blue-50 text-blue-700">
@@ -1002,8 +1022,8 @@ function AssistantPane({
         </div>
       </div>
 
-      <div className="min-h-0 overflow-auto px-4 py-6">
-        <div className="mx-auto flex max-w-3xl flex-col gap-4">
+      <div className="min-h-0 overflow-auto px-5 py-5">
+        <div className="mx-auto flex max-w-4xl flex-col gap-4">
           {!messages.length && !lastPrompt && !workflowRun ? <AssistantWelcome /> : null}
 
           {messages.map((message) => (
@@ -1043,7 +1063,9 @@ function AssistantPane({
                 description={
                   workflowRun.type === "brief"
                     ? "I am reading the chat and project context, then turning it into a clear brief."
-                    : "I am turning the brief into narrative structure, slide logic, and layout choices."
+                    : workflowRun.type === "visual_direction"
+                      ? "I am creating distinct visual directions so the deck has a real design point of view."
+                      : "I am turning the brief and style direction into narrative structure, slide logic, and layout choices."
                 }
               />
             </ChatBubble>
@@ -1114,9 +1136,9 @@ function AssistantPane({
         </div>
       </div>
 
-      <div className="border-t border-slate-200 bg-white/95 px-4 py-4 shadow-[0_-16px_40px_rgba(15,23,42,0.06)]">
-        <div className="mx-auto max-w-3xl">
-          <div className="rounded-xl border border-slate-300 bg-white p-2 shadow-[0_16px_40px_rgba(15,23,42,0.10)] transition focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100">
+      <div className="border-t border-slate-200 bg-white/95 px-5 py-3 shadow-[0_-12px_34px_rgba(15,23,42,0.06)]">
+        <div className="mx-auto max-w-4xl">
+          <div className="rounded-2xl border border-slate-300 bg-white p-2 shadow-[0_12px_30px_rgba(15,23,42,0.09)] transition focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-100">
             <textarea
               value={instruction}
               onChange={(event) => onInstructionChange(event.target.value)}
@@ -1127,16 +1149,16 @@ function AssistantPane({
                   onAsk();
                 }
               }}
-              rows={3}
-              className="block max-h-40 min-h-[78px] w-full resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:text-slate-400"
-              placeholder={canEdit ? "Ask SlideLeaf to generate or revise the deck..." : "View-only access: prompts are private and editing is disabled."}
+              rows={2}
+              className="block max-h-28 min-h-[54px] w-full resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:text-slate-400"
+              placeholder={canEdit ? "Describe the deck, refine the direction, or ask for changes..." : "View-only access: prompts are private and editing is disabled."}
             />
             <div className="flex items-center justify-between gap-2 px-1 pt-1">
               <div className="flex min-w-0 items-center gap-2">
                 <ModePicker value={mode} onChange={onModeChange} />
                 <ModelPicker value={provider} onChange={onProviderChange} />
                 <div className="truncate text-xs text-slate-400">
-                  {mode === "auto" ? `Auto uses ${stageLabel(conversation?.stage ?? "consultation")}` : stageLabel(mode)}
+                  {mode === "auto" ? `Auto uses ${shortStageLabel(conversation?.stage ?? "consultation")}` : shortStageLabel(mode)}
                 </div>
               </div>
               <button
@@ -1149,7 +1171,7 @@ function AssistantPane({
               </button>
             </div>
           </div>
-          <div className="mt-2 text-center text-[11px] text-slate-400">
+          <div className="mt-1 text-center text-[11px] text-slate-400">
             Press Ctrl+Enter to send. Generated files stay in review until you apply them.
           </div>
         </div>
@@ -1162,9 +1184,9 @@ function ModePicker({ value, onChange }: { value: AiMode; onChange: (value: AiMo
   const [open, setOpen] = useState(false);
   const options: Array<{ value: AiMode; label: string; description: string }> = [
     { value: "auto", label: "Auto", description: "Follow current workflow" },
-    { value: "consultation", label: "Consultation", description: "Clarify goal and constraints" },
-    { value: "slide_plan", label: "Plan", description: "Narrative and layout plan" },
-    { value: "generate", label: "Agent", description: "Generate workspace files" }
+    { value: "consultation", label: "Clarify", description: "Refine goal and constraints" },
+    { value: "slide_plan", label: "Plan", description: "Narrative and slide structure" },
+    { value: "generate", label: "Create", description: "Generate workspace files" }
   ];
   const selected = options.find((item) => item.value === value) ?? options[0];
 
@@ -1291,14 +1313,14 @@ function AssistantWelcome() {
     <ChatBubble role="assistant">
       <div className="space-y-3">
         <div>
-          <div className="text-sm font-semibold text-slate-950">What should this presentation become?</div>
+          <div className="text-sm font-semibold text-slate-950">Tell me what this deck needs to achieve.</div>
           <p className="mt-1 text-sm leading-6 text-slate-600">
-            Describe the topic, audience, tone, slide count, and visual style. I will clarify, plan, then generate files for review.
+            I will clarify the goal, show visual directions, plan the storyline, then create editable HTML slides for review.
           </p>
         </div>
         <div className="grid gap-2 text-sm sm:grid-cols-2">
-          <ExamplePrompt text="Make a 6-slide classroom deck about photosynthesis with a clean science style." />
-          <ExamplePrompt text="Create a dramatic story deck about The Little Prince, with navigation and progress." />
+          <ExamplePrompt text="Create an 8-slide investor deck for an AI-native slide studio. Make it premium, technical, and convincing." />
+          <ExamplePrompt text="Make a cinematic Chinese story deck about The Little Prince with elegant motion and navigation." />
         </div>
       </div>
     </ChatBubble>
@@ -1327,56 +1349,48 @@ function StageActionCard({
 
   return (
     <ChatBubble role="assistant">
-      <div className="w-full max-w-[42rem] space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-slate-950">{stageLabel(stage)} mode</div>
-            <div className="mt-1 text-xs text-slate-500">{stageDescription(stage)}</div>
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="w-full max-w-[44rem] rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
         {stage === "generate" ? (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-slate-950">Generate HTML from current plan</div>
+              <div className="text-sm font-semibold text-slate-950">Ready to create the deck</div>
               <p className="mt-1 text-xs leading-5 text-slate-600">
-                The agent will use the latest brief and plan as source of truth, then return files for review.
+                I will use the current brief, visual direction, and deck plan to create editable HTML files.
               </p>
             </div>
             {!htmlGenerationRequested && !running && canEdit ? (
               <button
-                  onClick={onGenerateHtml}
-                  className="inline-flex h-9 items-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800"
-                >
+                onClick={onGenerateHtml}
+                className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-[0_14px_28px_rgba(15,23,42,0.22)] transition hover:bg-slate-800"
+              >
                 <Sparkles size={15} />
-                Generate HTML
+                Generate deck
               </button>
             ) : null}
           </div>
         ) : artifactType ? (
           <div className="space-y-3">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200/70 pb-3">
               <div>
-                <div className="text-sm font-semibold text-slate-950">{artifactLabel(artifactType)}</div>
-                <p className="mt-1 text-xs leading-5 text-slate-600">{artifactHelp(artifactType)}</p>
+                <div className="text-sm font-semibold text-slate-950">{stageLabel(stage)}</div>
+                <p className="mt-1 text-xs leading-5 text-slate-600">{stageDescription(stage)}</p>
               </div>
-              <div className="flex gap-2">
+              {!currentArtifact ? (
                 <button
                   onClick={() =>
                     onGenerateArtifact(
                       artifactType,
                       undefined,
-                      currentArtifact ? `Refine ${artifactLabel(artifactType)}` : `Generate ${artifactLabel(artifactType)}`
+                      `Start ${artifactLabel(artifactType)}`
                     )
                   }
                   disabled={running || !canEdit}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-sm text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
+                  className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 transition hover:bg-slate-50 disabled:opacity-40"
                 >
                   <Sparkles size={14} />
-                  {currentArtifact ? `Refine ${artifactLabel(artifactType)}` : `Generate ${artifactLabel(artifactType)}`}
+                  Start
                 </button>
-              </div>
+              ) : null}
             </div>
 
             {currentArtifact ? (
@@ -1384,11 +1398,20 @@ function StageActionCard({
                 artifact={currentArtifact}
                 running={running}
                 canEdit={canEdit}
-                onStartPlan={() =>
+                onStartStyle={() =>
+                  onGenerateArtifact(
+                    "visual_direction",
+                    "Create three distinct visual directions from the current creative brief.",
+                    "Choose a visual direction"
+                  )
+                }
+                onStartPlan={(directionId?: string) =>
                   onGenerateArtifact(
                     "slide_plan",
-                    "Start Plan from the current consultation brief.",
-                    "Start Plan"
+                    directionId
+                      ? `Create the deck plan using visual direction ${directionId}.`
+                      : "Create the deck plan from the current creative brief and visual direction.",
+                    "Create deck plan"
                   )
                 }
                 onGenerateHtml={onGenerateHtml}
@@ -1396,12 +1419,11 @@ function StageActionCard({
               />
             ) : (
               <div className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-500">
-                No {artifactLabel(artifactType).toLowerCase()} yet. Generate this stage and continue the conversation.
+                I need this step before creating final HTML. Use the chat box to add details, or click Start.
               </div>
             )}
           </div>
         ) : null}
-      </div>
       </div>
     </ChatBubble>
   );
@@ -1411,6 +1433,7 @@ function ArtifactPreview({
   artifact,
   running,
   canEdit,
+  onStartStyle,
   onStartPlan,
   onGenerateHtml,
   htmlGenerationRequested
@@ -1418,12 +1441,23 @@ function ArtifactPreview({
   artifact: AiArtifact;
   running: boolean;
   canEdit: boolean;
-  onStartPlan: () => void;
+  onStartStyle: () => void;
+  onStartPlan: (directionId?: string) => void;
   onGenerateHtml: () => void;
   htmlGenerationRequested: boolean;
 }) {
   if (artifact.type === "brief") {
-    return <BriefArtifact artifact={artifact} running={running} canEdit={canEdit} onStartPlan={onStartPlan} />;
+    return <BriefArtifact artifact={artifact} running={running} canEdit={canEdit} onStartStyle={onStartStyle} />;
+  }
+  if (artifact.type === "visual_direction") {
+    return (
+      <VisualDirectionArtifact
+        artifact={artifact}
+        running={running}
+        canEdit={canEdit}
+        onStartPlan={onStartPlan}
+      />
+    );
   }
   if (artifact.type === "slide_plan") {
     return (
@@ -1453,12 +1487,12 @@ function BriefArtifact({
   artifact,
   running,
   canEdit,
-  onStartPlan
+  onStartStyle
 }: {
   artifact: AiArtifact;
   running: boolean;
   canEdit: boolean;
-  onStartPlan: () => void;
+  onStartStyle: () => void;
 }) {
   const data = asRecord(artifact.contentJson);
   const fields = [
@@ -1502,23 +1536,148 @@ function BriefArtifact({
       <ArtifactList title="Questions for you" items={questions} tone="blue" />
 
       {readyForPlan && canEdit ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
           <div>
-            <div className="text-sm font-semibold text-emerald-950">Brief is clear enough to plan</div>
-            <p className="mt-1 text-xs leading-5 text-emerald-800">
-              Start the next step to turn this brief into slide structure, action titles, and layouts.
+            <div className="text-sm font-semibold text-blue-950">Brief is clear enough to design</div>
+            <p className="mt-1 text-xs leading-5 text-blue-800">
+              Next I will create three visual directions so you can choose the look before generating slides.
             </p>
           </div>
           <button
-            onClick={onStartPlan}
+            onClick={onStartStyle}
             disabled={running}
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-emerald-700 px-3 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:opacity-50"
+            className="inline-flex h-9 items-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
           >
             <Sparkles size={15} />
-            Start Plan
+            Choose style
           </button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function VisualDirectionArtifact({
+  artifact,
+  running,
+  canEdit,
+  onStartPlan
+}: {
+  artifact: AiArtifact;
+  running: boolean;
+  canEdit: boolean;
+  onStartPlan: (directionId?: string) => void;
+}) {
+  const data = asRecord(artifact.contentJson);
+  const directions = Array.isArray(data.directions) ? data.directions.map(asRecord).filter(BooleanRecord) : [];
+  const recommended = textField(data, "recommended");
+
+  return (
+    <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_18px_45px_rgba(15,23,42,0.07)]">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-base font-semibold text-slate-950">Choose the deck's visual direction</div>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            Pick the visual system first. SlideLeaf will use it to constrain layout, motion, typography, and final HTML.
+          </p>
+        </div>
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+          {directions.length || 3} options
+        </span>
+      </div>
+
+      {directions.length ? (
+        <div className="grid gap-4">
+          {directions.map((direction, index) => {
+            const id = textField(direction, "id") || `direction-${index + 1}`;
+            const typography = asRecord(direction.typography);
+            const palette = Array.isArray(direction.palette) ? direction.palette.map(readableValue).filter(Boolean) : [];
+            const sampleHtml = textField(direction, "sampleSlideHtml");
+            const isRecommended = recommended === id;
+
+            return (
+              <article
+                key={id}
+                className={`overflow-hidden rounded-2xl border bg-white shadow-[0_14px_36px_rgba(15,23,42,0.08)] transition ${
+                  isRecommended ? "border-blue-300 ring-4 ring-blue-50" : "border-slate-200 hover:border-slate-300"
+                }`}
+              >
+                <div className="space-y-3 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-base font-semibold text-slate-950">
+                            {textField(direction, "name") || `Direction ${index + 1}`}
+                          </div>
+                          {isRecommended ? (
+                            <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[11px] font-semibold text-white">
+                              recommended
+                            </span>
+                          ) : null}
+                        </div>
+                        {textField(direction, "visualThesis") ? (
+                          <p className="mt-2 text-sm leading-6 text-slate-600">{textField(direction, "visualThesis")}</p>
+                        ) : null}
+                      </div>
+                      <div className="flex shrink-0 flex-wrap gap-2">
+                        {sampleHtml ? (
+                          <button
+                            type="button"
+                            onClick={() => openHtmlPreview(sampleHtml)}
+                            className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
+                          >
+                            <Play size={15} />
+                            Preview
+                          </button>
+                        ) : null}
+                        <button
+                          onClick={() => onStartPlan(id)}
+                          disabled={running || !canEdit}
+                          className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-[0_12px_26px_rgba(15,23,42,0.22)] transition hover:bg-slate-800 disabled:opacity-40"
+                        >
+                          <Check size={15} />
+                          Use this
+                        </button>
+                      </div>
+                    </div>
+
+                    <MiniFact label="Best for" value={textField(direction, "bestFor")} />
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {palette.slice(0, 7).map((color) => (
+                        <span
+                          key={color}
+                          className="h-7 w-12 rounded-full border border-slate-200 shadow-sm"
+                          style={{ background: color }}
+                          title={color}
+                        />
+                      ))}
+                    </div>
+
+                    <details className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                      <summary className="cursor-pointer text-xs font-semibold text-slate-600">
+                        Design notes
+                      </summary>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        <MiniFact label="Layout" value={textField(direction, "layoutPersonality")} />
+                        <MiniFact
+                          label="Typography"
+                          value={[textField(typography, "display"), textField(typography, "body")].filter(Boolean).join(" / ")}
+                        />
+                        <MiniFact label="Motion" value={listField(direction, "motionLanguage").slice(0, 3).join(", ")} />
+                        <MiniFact label="Signature" value={listField(direction, "signatureElements").slice(0, 3).join(", ")} />
+                      </div>
+                    </details>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <pre className="max-h-64 overflow-auto rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs leading-5 text-slate-700">
+          {JSON.stringify(artifact.contentJson, null, 2)}
+        </pre>
+      )}
     </div>
   );
 }
@@ -1538,11 +1697,18 @@ function PlanArtifact({
 }) {
   const data = asRecord(artifact.contentJson);
   const slides = Array.isArray(data.slides) ? data.slides.map(asRecord).filter(BooleanRecord) : [];
+  const chosenDirection = asRecord(data.chosenDirection);
+  const designSystem = asRecord(data.designSystem);
 
   return (
-    <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-4">
+    <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-semibold text-slate-950">Deck plan</div>
+        <div>
+          <div className="text-sm font-semibold text-slate-950">Deck plan</div>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            Storyline, slide structure, layouts, and motion rules are ready.
+          </p>
+        </div>
         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
           {slides.length ? `${slides.length} slides` : "current plan"}
         </span>
@@ -1555,10 +1721,22 @@ function PlanArtifact({
         </div>
       ) : null}
 
-      {textField(data, "designDirection") ? (
+      {textField(chosenDirection, "name") || textField(data, "designDirection") ? (
         <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Design direction</div>
-          <p className="mt-1 text-sm leading-6 text-slate-700">{textField(data, "designDirection")}</p>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Chosen visual system</div>
+          <p className="mt-1 text-sm leading-6 text-slate-700">
+            {textField(chosenDirection, "name") || textField(data, "designDirection")}
+            {textField(chosenDirection, "reason") ? ` — ${textField(chosenDirection, "reason")}` : ""}
+          </p>
+        </div>
+      ) : null}
+
+      {Object.keys(designSystem).length ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <MiniFact label="Typography" value={textField(designSystem, "typography")} />
+          <MiniFact label="Motion" value={listField(designSystem, "motion").join(", ")} />
+          <MiniFact label="Components" value={listField(designSystem, "componentRules").slice(0, 3).join("; ")} />
+          <MiniFact label="Avoid" value={listField(designSystem, "antiPatterns").slice(0, 3).join("; ")} />
         </div>
       ) : null}
 
@@ -1575,11 +1753,11 @@ function PlanArtifact({
       )}
 
       {!htmlGenerationRequested && !running && canEdit ? (
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
         <div>
           <div className="text-sm font-semibold text-blue-950">Plan is ready for generation</div>
           <p className="mt-1 text-xs leading-5 text-blue-800">
-            Generate editable HTML workspace files from this plan.
+            Generate editable HTML files with this storyline, visual system, and motion language.
           </p>
         </div>
         <button
@@ -1588,7 +1766,7 @@ function PlanArtifact({
           className="inline-flex h-9 items-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
         >
           <Sparkles size={15} />
-          Generate HTML
+          Generate deck
         </button>
       </div>
       ) : null}
@@ -1602,13 +1780,16 @@ function SlidePlanItem({ slide, fallbackIndex }: { slide: JsonRecord; fallbackIn
   const layout = textField(slide, "layout");
   const pattern = textField(slide, "visualPattern");
   const message = textField(slide, "message");
+  const visualRole = textField(slide, "visualRole");
+  const density = textField(slide, "density");
   const contentBlocks = Array.isArray(slide.contentBlocks)
     ? slide.contentBlocks.map(readableValue).filter(Boolean)
     : [];
+  const visualTreatment = asRecord(slide.visualTreatment);
   const designNotes = asRecord(slide.designNotes);
 
   return (
-    <article className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+    <article className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="flex items-start gap-3">
         <div className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-slate-950 text-xs font-semibold text-white">
           {index}
@@ -1618,18 +1799,47 @@ function SlidePlanItem({ slide, fallbackIndex }: { slide: JsonRecord; fallbackIn
           <div className="mt-1 flex flex-wrap gap-1.5">
             {layout ? <Tag>{layout}</Tag> : null}
             {pattern ? <Tag>{pattern}</Tag> : null}
+            {visualRole ? <Tag>{visualRole}</Tag> : null}
+            {density ? <Tag>{density} density</Tag> : null}
           </div>
           {message ? <p className="mt-2 text-sm leading-6 text-slate-600">{message}</p> : null}
           <ArtifactList title="Supporting points" items={listField(slide, "supportingPoints")} compact />
-          <ArtifactList title="Evidence needed" items={listField(slide, "evidenceNeeded")} compact tone="amber" />
           <ArtifactList title="Content blocks" items={contentBlocks} compact />
+          <ArtifactList
+            title="Visual treatment"
+            items={[
+              textField(visualTreatment, "composition"),
+              textField(visualTreatment, "motion"),
+              textField(visualTreatment, "signatureElement")
+            ].filter(Boolean)}
+            compact
+            tone="blue"
+          />
+          {textField(slide, "speakerIntent") ? (
+            <p className="mt-2 text-xs leading-5 text-slate-500">Presenter intent: {textField(slide, "speakerIntent")}</p>
+          ) : null}
           {textField(designNotes, "mood") ? (
             <p className="mt-2 text-xs leading-5 text-slate-500">Mood: {textField(designNotes, "mood")}</p>
           ) : null}
-          <ArtifactList title="Avoid" items={listField(designNotes, "avoid")} compact tone="red" />
+          <ArtifactList
+            title="Avoid"
+            items={[...listField(designNotes, "avoid"), ...listField(slide, "avoid")]}
+            compact
+            tone="red"
+          />
         </div>
       </div>
     </article>
+  );
+}
+
+function MiniFact({ label, value }: { label: string; value: string }) {
+  if (!value) return null;
+  return (
+    <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+      <div className="mt-1 max-h-[3.75rem] overflow-hidden text-xs leading-5 text-slate-700">{value}</div>
+    </div>
   );
 }
 
@@ -1782,13 +1992,26 @@ function EditorPane({
 function PreviewPane({
   previewSrc,
   projectTitle,
-  compileStatus
+  compileStatus,
+  compileLog,
+  canEdit,
+  repairRunning,
+  onRepairCompile
 }: {
   previewSrc: string;
   projectTitle: string;
   compileStatus?: CompileJob["status"];
+  compileLog: string;
+  canEdit: boolean;
+  repairRunning: boolean;
+  onRepairCompile: () => void;
 }) {
   const isCompiling = compileStatus === "queued" || compileStatus === "running";
+  const isFailed = compileStatus === "failed";
+  const qualityLines = compileLog
+    .split("\n")
+    .filter((line) => /^Quality (?:error|warning):/i.test(line))
+    .slice(0, 4);
   const statusLabel =
     compileStatus === "success"
       ? "Ready"
@@ -1830,12 +2053,16 @@ function PreviewPane({
           />
         ) : (
           <div className="w-[min(88%,980px)]">
-            <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-white/80 bg-white/85 px-3 py-2 text-xs shadow-sm backdrop-blur">
-              <div className="min-w-0 truncate font-medium text-slate-600">
-                {isCompiling ? "Building static HTML preview" : "Preview will appear after compile"}
-              </div>
-              <div className="flex shrink-0 items-center gap-2 text-slate-500">
-                {isCompiling ? (
+              <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-white/80 bg-white/85 px-3 py-2 text-xs shadow-sm backdrop-blur">
+                <div className="min-w-0 truncate font-medium text-slate-600">
+                {isFailed
+                  ? "Compile failed before publishing a preview"
+                  : isCompiling
+                    ? "Building static HTML preview"
+                    : "Preview will appear after compile"}
+                </div>
+                <div className="flex shrink-0 items-center gap-2 text-slate-500">
+                  {isCompiling ? (
                   <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
                 ) : null}
                 <span>{statusLabel}</span>
@@ -1856,15 +2083,17 @@ function PreviewPane({
                 <div className="flex min-w-0 flex-col justify-center">
                   <div className="mb-5 h-6 w-36 rounded-full bg-slate-100" />
                   <h1 className="text-[clamp(28px,4vw,54px)] font-semibold leading-none tracking-normal text-slate-950">
-                    {projectTitle}
+                    {isFailed ? "Deck needs a repair pass" : projectTitle}
                   </h1>
                   <p className="mt-5 max-w-xl text-[clamp(14px,1.4vw,20px)] leading-7 text-slate-500">
-                    {isCompiling
+                    {isFailed
+                      ? "The quality gate stopped this compile so a broken HTML deck is not shared. Check the issues below or use the chat to repair the deck."
+                      : isCompiling
                       ? "SlideLeaf is rendering the current workspace into a shareable HTML presentation."
                       : "Compile the workspace to render an interactive HTML presentation here."}
                   </p>
                   <div className="mt-8 grid max-w-lg grid-cols-3 gap-3">
-                    {["Files", "Render", "Share"].map((item, index) => (
+                    {(isFailed ? ["Quality", "Repair", "Retry"] : ["Files", "Render", "Share"]).map((item, index) => (
                       <div key={item} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-3">
                         <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                           Step {index + 1}
@@ -1873,6 +2102,28 @@ function PreviewPane({
                       </div>
                     ))}
                   </div>
+                  {qualityLines.length ? (
+                    <div className="mt-5 max-w-xl rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                        Quality issues
+                      </div>
+                      <ul className="mt-2 space-y-1 text-xs leading-5 text-amber-900">
+                        {qualityLines.map((line, index) => (
+                          <li key={`${line}-${index}`}>{line.replace(/^Quality (?:error|warning):\s*/i, "")}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {isFailed && canEdit ? (
+                    <button
+                      onClick={onRepairCompile}
+                      disabled={repairRunning}
+                      className="mt-5 inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-[0_14px_28px_rgba(15,23,42,0.18)] transition hover:bg-slate-800 disabled:opacity-40"
+                    >
+                      <Sparkles size={15} />
+                      Repair with AI
+                    </button>
+                  ) : null}
                 </div>
                 <div className="hidden min-w-0 flex-col justify-center gap-3 md:flex">
                   <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
@@ -2048,10 +2299,11 @@ function defaultContentFor(filePath: string): string {
   return "";
 }
 
-const WORKFLOW_STAGES: WorkflowStage[] = ["consultation", "slide_plan", "generate"];
+const WORKFLOW_STAGES: WorkflowStage[] = ["consultation", "visual_direction", "slide_plan", "generate"];
 
 function artifactTypeForStage(stage: WorkflowStage): ArtifactType | null {
   if (stage === "consultation") return "brief";
+  if (stage === "visual_direction") return "visual_direction";
   if (stage === "slide_plan") return "slide_plan";
   return null;
 }
@@ -2069,29 +2321,42 @@ function shouldShowStageAction(stage: WorkflowStage, artifacts: AiArtifact[]): b
 }
 
 function stageLabel(stage: WorkflowStage): string {
-  if (stage === "consultation") return "Consultation";
+  if (stage === "consultation") return "Understand the deck";
+  if (stage === "visual_direction") return "Choose a visual direction";
+  if (stage === "slide_plan") return "Review the deck plan";
+  return "Create the HTML deck";
+}
+
+function shortStageLabel(stage: WorkflowStage): string {
+  if (stage === "consultation") return "Clarify";
+  if (stage === "visual_direction") return "Style";
   if (stage === "slide_plan") return "Plan";
-  return "Generate";
+  return "Create";
 }
 
 function stageDescription(stage: WorkflowStage): string {
-  if (stage === "consultation") return "Clarify goals";
-  if (stage === "slide_plan") return "Narrative + layouts";
-  return "HTML files";
+  if (stage === "consultation") return "I will clarify the audience, goal, tone, constraints, and missing inputs.";
+  if (stage === "visual_direction") return "Pick the look before generation so the final deck has a strong design point of view.";
+  if (stage === "slide_plan") return "Review the storyline, action titles, layouts, and motion plan before HTML generation.";
+  return "Generate editable workspace files from the approved direction and plan.";
 }
 
 function artifactLabel(type: string): string {
   if (type === "brief") return "Brief";
+  if (type === "visual_direction") return "Style directions";
   return "Plan";
 }
 
 function artifactHelp(type: ArtifactType): string {
   if (type === "brief") return "Clarifies audience, goal, tone, constraints, and missing inputs.";
+  if (type === "visual_direction") return "Shows several visual systems before the deck is generated.";
   return "Combines narrative logic, action titles, layouts, content blocks, and design notes.";
 }
 
 function workflowRunLabel(type: ArtifactType): string {
-  return type === "brief" ? "Refining consultation brief" : "Building deck plan";
+  if (type === "brief") return "Refining the brief";
+  if (type === "visual_direction") return "Creating visual directions";
+  return "Building the deck plan";
 }
 
 function asRecord(value: unknown): JsonRecord {
@@ -2126,6 +2391,19 @@ function readableValue(value: unknown): string {
     return JSON.stringify(value);
   }
   return "";
+}
+
+function openHtmlPreview(html: string): void {
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+
+  if (!opened) {
+    URL.revokeObjectURL(url);
+    return;
+  }
+
+  window.setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000);
 }
 
 function meaningfulList(items: string[]): string[] {

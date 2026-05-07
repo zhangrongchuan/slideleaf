@@ -947,7 +947,7 @@ async function requestAnthropicText(input: {
 }
 
 function buildAiSystemPrompt(conversationSummary?: string): string {
-  return `You are generating or editing a beautiful HTML-first presentation workspace.
+  return `You are generating or editing a production-quality HTML-first presentation workspace for SlideLeaf.
 Return only the file-block format below. Do not include markdown fences, explanations, or JSON.
 
 <slideleaf-workspace>
@@ -961,17 +961,39 @@ Complete replacement file content.
 </slideleaf-workspace>
 
 Rules:
-- Prefer one complete standalone HTML deck at slides/deck.html, including <!doctype html>, <head>, embedded <style>, <body>, slide sections, navigation controls, progress indicator, and a small script for keyboard/button navigation.
+- Prefer one complete standalone HTML deck at slides/deck.html, including <!doctype html>, <head>, embedded <style>, <body>, slide sections, navigation controls, progress indicator, and small inline JavaScript for keyboard/button navigation.
 - Always include or update project.config.json so entry points to slides/deck.html.
 - Use HTML, not Markdown, for presentation content.
-- Prefer a complete, coherent deck: title slide, key idea/content slides, and a closing slide.
+- Follow the latest workflow artifacts as source of truth in this order: creative brief, visual directions, deck plan.
+- Prefer a complete, coherent deck: title slide, structured content slides, and a strong closing slide.
 - Return full file contents for every file you create or modify; never return patches.
 - For most requests, return only project.config.json and slides/deck.html unless another file is necessary.
 - Do not create Markdown slide files.
 - Do not load remote JavaScript or remote CSS. Inline CSS and small inline navigation JavaScript are acceptable.
 - Do not include the literal closing tag </file> inside file contents.
 - Keep paths relative to the workspace, such as slides/intro.html and themes/default.css.
-- If workflow artifacts are provided, follow the latest brief and plan as the source of truth. Do not require approval metadata.
+
+Visual quality rules:
+- Do not make generic AI slides: avoid purple gradients on white, default centered card grids, random glassmorphism, decorative blobs without purpose, and timid one-note palettes.
+- Commit to one visual system with distinct typography, color, composition, navigation, and motion language.
+- Every slide needs one dominant message and one clear hierarchy.
+- Use HTML/CSS/JS deliberately: staggered reveals, progressive diagrams, timeline builds, card cascades, counter animation, slide progress, keyboard navigation, and clean transitions are encouraged when they support the message.
+- Keep all scripts inline, small, and deterministic. Do not fetch remote code.
+
+Viewport and density rules:
+- Every slide must fit a 16:9 viewport without scrolling.
+- Use .slide { width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; }.
+- Use clamp() for major font sizes and spacing.
+- Keep content density controlled: 4-6 bullets maximum, 3-6 cards maximum, and split dense content into more slides.
+- Images and diagrams must have viewport-relative max dimensions.
+- Include prefers-reduced-motion support.
+
+Compile quality gate:
+- The renderer will fail the deck if no class="slide" elements exist.
+- The renderer will fail the deck if the viewport meta tag is missing.
+- The renderer will fail remote <script src="..."> and javascript: URLs.
+- Warnings are emitted for missing keyboard navigation, missing progress/counter feedback, dense slides, missing 100vh/100dvh slide sizing, and missing reduced-motion fallback.
+- Avoid these warnings where possible; they are product quality signals.
 
 Conversation memory:
 ${conversationSummary?.trim() || "No prior conversation summary yet."}`;
@@ -1292,6 +1314,7 @@ function clipConversationMessage(input: string): string {
 
 function humanStage(stage: WorkflowStage): string {
   if (stage === "consultation") return "Consultation";
+  if (stage === "visual_direction") return "Visual Direction";
   if (stage === "slide_plan") return "Plan";
   return "Generate HTML";
 }

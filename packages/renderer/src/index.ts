@@ -8,6 +8,20 @@ export type RenderProjectOptions = {
   entry?: string;
 };
 
+export type HtmlQualitySeverity = "error" | "warning";
+
+export type HtmlQualityIssue = {
+  severity: HtmlQualitySeverity;
+  code: string;
+  message: string;
+};
+
+export type HtmlQualityReport = {
+  score: number;
+  slideCount: number;
+  issues: HtmlQualityIssue[];
+};
+
 type ProjectConfig = {
   name?: string;
   entry?: string;
@@ -83,7 +97,22 @@ export async function renderProject(options: RenderProjectOptions): Promise<Rend
         }
 
         const entryHtmlPath = path.join(outputDir, "index.html");
-        await writeFile(entryHtmlPath, renderFullHtmlDocument(fullDeckSource, fullDeckPath), "utf8");
+        const html = renderFullHtmlDocument(fullDeckSource, fullDeckPath);
+        const quality = analyzeHtmlQuality(html);
+        logs.push(...formatQualityLogs(quality));
+        const qualityErrors = quality.issues.filter((issue) => issue.severity === "error");
+        if (qualityErrors.length) {
+          return {
+            success: false,
+            logs,
+            outputDir,
+            errors: qualityErrors.map((issue) => ({
+              file: fullDeckPath,
+              message: `${issue.code}: ${issue.message}`
+            }))
+          };
+        }
+        await writeFile(entryHtmlPath, html, "utf8");
         await writeManifest(outputDir, config, slidePaths);
         logs.push(`Rendered standalone HTML deck ${fullDeckPath}`);
         logs.push("Generated dist/index.html");
@@ -132,6 +161,19 @@ export async function renderProject(options: RenderProjectOptions): Promise<Rend
       slidesHtml: renderedSlides.join("\n"),
       themeCss
     });
+    const quality = analyzeHtmlQuality(html);
+    logs.push(...formatQualityLogs(quality));
+    const qualityErrors = quality.issues.filter((issue) => issue.severity === "error");
+    if (qualityErrors.length) {
+      return {
+        success: false,
+        logs,
+        outputDir,
+        errors: qualityErrors.map((issue) => ({
+          message: `${issue.code}: ${issue.message}`
+        }))
+      };
+    }
     const entryHtmlPath = path.join(outputDir, "index.html");
 
     await writeFile(entryHtmlPath, html, "utf8");
@@ -361,6 +403,160 @@ export function renderMarkdown(source: string, sourcePath = ""): string {
   flushList();
 
   return blocks.join("\n");
+}
+
+export function analyzeHtmlQuality(html: string): HtmlQualityReport {
+  const issues: HtmlQualityIssue[] = [];
+  const slideMatches = [...html.matchAll(/<(?:section|article|div)\b[^>]*class=(["'])[^"']*\bslide\b[^"']*\1/gi)];
+  const slideCount = slideMatches.length;
+  const slideBodies = extractSlideBodies(html);
+  const textBodies = slideBodies.map((body) => stripHtml(body));
+
+  if (!/<!doctype\s+html/i.test(html)) {
+    issues.push({
+      severity: "error",
+      code: "missing-doctype",
+      message: "Generated deck should be a full HTML document with <!doctype html>."
+    });
+  }
+
+  if (!/<meta\b[^>]*name=(["'])viewport\1/i.test(html)) {
+    issues.push({
+      severity: "error",
+      code: "missing-viewport",
+      message: "Missing viewport meta tag. Responsive slide sizing may break."
+    });
+  }
+
+  if (slideCount === 0) {
+    issues.push({
+      severity: "error",
+      code: "missing-slides",
+      message: "No elements with class=\"slide\" were found."
+    });
+  }
+
+  if (/<script\b[^>]*\bsrc\s*=/i.test(html)) {
+    issues.push({
+      severity: "error",
+      code: "remote-script",
+      message: "Remote script tags are not allowed in compiled decks."
+    });
+  }
+
+  if (/<link\b[^>]*\bhref=(["'])https?:/i.test(html)) {
+    issues.push({
+      severity: "warning",
+      code: "remote-stylesheet",
+      message: "Remote stylesheets reduce portability. Inline critical CSS or use local assets."
+    });
+  }
+
+  if (/\b(?:href|src)\s*=\s*(["'])\s*javascript:/i.test(html)) {
+    issues.push({
+      severity: "error",
+      code: "javascript-url",
+      message: "javascript: URLs are not allowed."
+    });
+  }
+
+  if (!/\.slide\b[\s\S]{0,1200}(?:height|min-height)\s*:\s*(?:100vh|100dvh)/i.test(html)) {
+    issues.push({
+      severity: "warning",
+      code: "slide-height",
+      message: "Slides should explicitly use 100vh or 100dvh to preserve presentation framing."
+    });
+  }
+
+  if (!/overflow\s*:\s*hidden/i.test(html)) {
+    issues.push({
+      severity: "warning",
+      code: "overflow-policy",
+      message: "No overflow:hidden rule found. Dense slides may scroll or crop unpredictably."
+    });
+  }
+
+  if (!/prefers-reduced-motion/i.test(html) && /animation|transition/i.test(html)) {
+    issues.push({
+      severity: "warning",
+      code: "reduced-motion",
+      message: "Motion is used without a prefers-reduced-motion fallback."
+    });
+  }
+
+  if (!/keydown|ArrowRight|ArrowLeft|nextSlide|prevSlide/i.test(html)) {
+    issues.push({
+      severity: "warning",
+      code: "keyboard-navigation",
+      message: "No keyboard navigation was detected."
+    });
+  }
+
+  if (!/progress|counter|slide-count|aria-live/i.test(html)) {
+    issues.push({
+      severity: "warning",
+      code: "navigation-feedback",
+      message: "No progress or slide counter indicator was detected."
+    });
+  }
+
+  textBodies.forEach((text, index) => {
+    const wordCount = text.split(/\s+/).filter(Boolean).length;
+    const bulletCount = countSlideListItems(slideBodies[index] ?? "");
+    if (wordCount > 180) {
+      issues.push({
+        severity: "warning",
+        code: "dense-slide",
+        message: `Slide ${index + 1} has about ${wordCount} words. Split dense content for better readability.`
+      });
+    }
+    if (bulletCount > 7) {
+      issues.push({
+        severity: "warning",
+        code: "too-many-bullets",
+        message: `Slide ${index + 1} has ${bulletCount} bullet/list items. Keep lists short or split the slide.`
+      });
+    }
+  });
+
+  const errorCount = issues.filter((issue) => issue.severity === "error").length;
+  const warningCount = issues.length - errorCount;
+  const score = Math.max(0, 100 - errorCount * 28 - warningCount * 6);
+
+  return { score, slideCount, issues };
+}
+
+function formatQualityLogs(report: HtmlQualityReport): string[] {
+  const logs = [`Quality check: score ${report.score}/100, slides ${report.slideCount}`];
+  for (const issue of report.issues) {
+    logs.push(`Quality ${issue.severity}: ${issue.code} - ${issue.message}`);
+  }
+  if (!report.issues.length) logs.push("Quality check passed with no issues");
+  return logs;
+}
+
+function extractSlideBodies(html: string): string[] {
+  const bodies: string[] = [];
+  const pattern = /<(section|article|div)\b([^>]*)class=(["'])[^"']*\bslide\b[^"']*\3[^>]*>([\s\S]*?)<\/\1>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(html))) {
+    bodies.push(match[4] ?? "");
+  }
+  return bodies;
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function countSlideListItems(html: string): number {
+  return (html.match(/<li\b/gi) ?? []).length;
 }
 
 function renderInline(source: string, sourcePath: string): string {

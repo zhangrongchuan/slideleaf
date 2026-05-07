@@ -1,5 +1,5 @@
-export const WORKFLOW_STAGES = ["consultation", "slide_plan", "generate"] as const;
-export const ARTIFACT_TYPES = ["brief", "slide_plan"] as const;
+export const WORKFLOW_STAGES = ["consultation", "visual_direction", "slide_plan", "generate"] as const;
+export const ARTIFACT_TYPES = ["brief", "visual_direction", "slide_plan"] as const;
 
 export type WorkflowStage = (typeof WORKFLOW_STAGES)[number];
 export type ArtifactType = (typeof ARTIFACT_TYPES)[number];
@@ -10,6 +10,7 @@ export function isWorkflowStage(value: unknown): value is WorkflowStage {
 
 export function normalizeWorkflowStage(value: unknown): WorkflowStage {
   if (value === "storyline") return "slide_plan";
+  if (value === "style" || value === "visual") return "visual_direction";
   return isWorkflowStage(value) ? value : "consultation";
 }
 
@@ -18,69 +19,160 @@ export function isArtifactType(value: unknown): value is ArtifactType {
 }
 
 export function nextStageAfterApproval(type: ArtifactType): WorkflowStage {
-  if (type === "brief") return "slide_plan";
+  if (type === "brief") return "visual_direction";
+  if (type === "visual_direction") return "slide_plan";
   return "generate";
 }
 
 export function stageForArtifact(type: ArtifactType): WorkflowStage {
   if (type === "brief") return "consultation";
+  if (type === "visual_direction") return "visual_direction";
   return "slide_plan";
 }
 
 export function artifactLabel(type: ArtifactType): string {
-  if (type === "brief") return "Consultation brief";
-  return "Plan";
+  if (type === "brief") return "Creative brief";
+  if (type === "visual_direction") return "Visual directions";
+  return "Deck plan";
 }
 
 export function buildArtifactSystemPrompt(type: ArtifactType): string {
-  const base = `You are helping build an AI-native HTML Slide Studio deck through controlled generation.
-Return only valid JSON. Do not include markdown fences or explanation.
-The user must review and approve this artifact before later stages can continue.`;
+  const base = `You are the strategy and design engine for SlideLeaf, an AI-native HTML slide studio.
+Return only valid JSON. Do not include markdown fences or explanatory prose.
+
+Product principles:
+- The user sees a simple chat and visual choices; internal artifacts must be structured, rigorous, and easy for software to render.
+- Make presentations usable for real work, not generic AI slides.
+- Use HTML/CSS/JS as a creative medium: typography, layout, motion, progressive diagrams, and interaction should feel intentional.
+- Prefer clear action titles over topic labels.
+- Do not generate final HTML in artifact stages.`;
 
   if (type === "brief") {
     return `${base}
 
-Generate a consultation brief. If important information is missing, include concise clarification questions.
+Generate a concise creative brief from the user's request, project files, and conversation.
+If critical information is missing, ask no more than 3 high-signal clarification questions.
+If enough information is present, keep unknowns and clarifyingQuestions empty.
+
 Schema:
 {
-  "summary": "1-2 sentence understanding of the deck request",
+  "summary": "2-3 sentence human-readable understanding of the deck request",
   "topic": "deck topic",
   "audience": "target audience or unknown",
-  "purpose": "presentation purpose",
-  "tone": "visual/content tone",
+  "occasion": "pitch | report | class | interview | product demo | story | other",
+  "purpose": "what the presentation must accomplish",
+  "emotionalGoal": "what the audience should feel or believe",
+  "tone": "content and visual tone",
   "language": "language preference",
   "slideCount": "number or range",
-  "mustInclude": ["important content"],
+  "mustInclude": ["specific content, facts, or moments"],
+  "avoid": ["things that would make the deck weaker"],
   "unknowns": ["missing inputs"],
   "clarifyingQuestions": ["question"]
 }`;
   }
 
+  if (type === "visual_direction") {
+    return `${base}
+
+Generate 3 distinct visual directions for the deck. This is the show-don't-tell stage.
+Each direction must be visually distinctive, context-specific, and not a generic AI template.
+Avoid generic purple gradients, default centered cards, timid palettes, and undifferentiated glassmorphism.
+Use abstract CSS shapes, typography, color, motion, and composition. No remote scripts.
+
+Each sampleSlideHtml should be a compact standalone HTML preview for one title slide:
+- It may include inline CSS.
+- It should not include remote JavaScript.
+- Keep it under 6500 characters.
+- It must show the actual deck topic or title.
+
+Schema:
+{
+  "recommended": "id of strongest option",
+  "directions": [
+    {
+      "id": "direction-a",
+      "name": "distinctive style name",
+      "bestFor": "why this direction fits the user",
+      "visualThesis": "one sentence describing the design idea",
+      "palette": ["#hex", "#hex", "#hex"],
+      "typography": {
+        "display": "font direction",
+        "body": "font direction"
+      },
+      "layoutPersonality": "composition rules and spatial rhythm",
+      "motionLanguage": ["specific motion pattern"],
+      "signatureElements": ["visual motif"],
+      "avoid": ["visual mistakes"],
+      "sampleSlideHtml": "<!doctype html>..."
+    }
+  ]
+}`;
+  }
+
   return `${base}
 
-Generate one integrated plan. Do not write HTML.
-The plan must combine narrative logic, action titles, slide structure, layout choices, content blocks, and design direction.
+Generate one integrated deck plan and slide schema. Do not write HTML.
+Use the latest brief and visual direction as source of truth. If several visual directions exist, use the selected/recommended direction unless the user explicitly asks otherwise.
+
+Allowed layout archetypes:
+- hero-title
+- section-divider
+- two-column-explanation
+- kpi-cards
+- three-card-diagnosis
+- comparison-table
+- timeline
+- roadmap
+- 2x2-matrix
+- architecture-diagram
+- process-flow
+- quote-focus
+- image-story
+- closing-callout
+
+Content density rules:
+- One main message per slide.
+- Prefer 4-6 short bullets maximum.
+- KPI/card slides should use 3-6 cards maximum.
+- If content is dense, split it across slides.
+- Every slide must be renderable in a 16:9 viewport without scrolling.
+
 Schema:
 {
   "narrativeArc": "overall argument or story logic",
-  "designDirection": "overall visual system",
+  "chosenDirection": {
+    "id": "direction id if available",
+    "name": "style name",
+    "reason": "why this direction was chosen"
+  },
+  "designSystem": {
+    "palette": ["#hex"],
+    "typography": "font pairing and hierarchy",
+    "motion": ["motion patterns"],
+    "componentRules": ["rules for cards, diagrams, tables, navigation"],
+    "antiPatterns": ["things generator must avoid"]
+  },
   "slides": [
     {
       "id": "s1",
       "index": 1,
-      "layout": "hero | two-column | 2x2-matrix | timeline | comparison-table | roadmap | architecture-diagram | kpi-cards | closing",
-      "visualPattern": "specific pattern",
+      "layout": "one allowed layout archetype",
+      "visualRole": "opening impact | problem framing | evidence | explanation | transition | close",
       "actionTitle": "clear claim, not a topic label",
       "message": "main idea",
       "supportingPoints": ["point"],
-      "evidenceNeeded": ["optional data/source"],
       "contentBlocks": [
-        { "type": "headline | paragraph | bullets | metric | table | diagram-node", "text": "content" }
+        { "type": "headline | paragraph | bullets | metric | table | diagram-node | quote", "text": "content" }
       ],
-      "designNotes": {
-        "mood": "specific mood",
-        "avoid": ["visual mistakes to avoid"]
-      }
+      "visualTreatment": {
+        "composition": "how this slide should be arranged",
+        "motion": "specific reveal/build behavior",
+        "signatureElement": "style motif used on this slide"
+      },
+      "density": "low | medium | high",
+      "speakerIntent": "what presenter says or emphasizes",
+      "avoid": ["slide-specific mistakes"]
     }
   ]
 }`;
