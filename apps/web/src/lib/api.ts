@@ -1,4 +1,4 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+export const API_URL = normalizeApiUrl(process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000");
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = init.method || "GET";
@@ -19,12 +19,13 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
+    const responseText = await response.text();
     try {
-      const data = (await response.json()) as { message?: string | string[] };
+      const data = JSON.parse(responseText) as { message?: string | string[] };
       if (Array.isArray(data.message)) message = data.message.join(", ");
       else if (data.message) message = data.message;
     } catch {
-      message = await response.text();
+      message = responseText || message;
     }
     console.warn(logLabel, message);
     throw new Error(message);
@@ -32,4 +33,11 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 
   console.info(logLabel);
   return response.json() as Promise<T>;
+}
+
+function normalizeApiUrl(input: string): string {
+  const value = input.trim().replace(/\/+$/, "");
+  if (/^https?:\/\//i.test(value)) return value;
+  if (/^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(value)) return `http://${value}`;
+  return `https://${value}`;
 }
