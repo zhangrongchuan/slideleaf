@@ -1,0 +1,83 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.pnpm-store/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+*.kubeconfig
+
+# Runtime data, uploads, and database files
+tmp/
+temp/
+.tmp/
+uploads/
+/storage/
+postgres_data/
+minio_data/
+redis_data/
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql
+*.tar
+*.tar.gz
+*.zip
+
+# Build output
+dist/
+build/
+out/
+.next/
+**/.next/
+**/dist/
+**/build/
+**/out/
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Test and coverage output
+coverage/
+**/coverage/
+playwright-report/
+test-results/
+.nyc_output/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Tool caches
+.turbo/
+.cache/
+.parcel-cache/
+.eslintcache
+.swc/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.bak
+*.tmp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+DEPLOYMENT.md

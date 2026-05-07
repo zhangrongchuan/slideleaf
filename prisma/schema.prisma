@@ -1,0 +1,183 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String?
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ownedProjects   Project[]        @relation("ProjectOwner")
+  memberships     ProjectMember[]
+  aiTasks         AiTask[]
+  aiConversations AiConversation[]
+}
+
+model Project {
+  id                 String   @id @default(uuid())
+  title              String
+  description        String?
+  ownerId            String
+  defaultEntryFileId String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  owner           User             @relation("ProjectOwner", fields: [ownerId], references: [id])
+  members         ProjectMember[]
+  files           File[]
+  versions        Version[]
+  compileJobs     CompileJob[]
+  assets          Asset[]
+  aiConversations AiConversation[]
+  aiArtifacts     AiArtifact[]
+}
+
+model ProjectMember {
+  id        String   @id @default(uuid())
+  projectId String
+  userId    String
+  role      String
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+}
+
+model File {
+  id          String   @id @default(uuid())
+  projectId   String
+  parentId    String?
+  name        String
+  path        String
+  kind        String
+  mimeType    String?
+  isBinary    Boolean  @default(false)
+  contentText String?
+  storageKey  String?
+  ydocId      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, path])
+  @@index([projectId, path])
+}
+
+model Asset {
+  id         String   @id @default(uuid())
+  projectId  String
+  fileId     String?
+  storageKey String
+  mimeType   String
+  sizeBytes  Int
+  createdAt  DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Version {
+  id                 String   @id @default(uuid())
+  projectId          String
+  createdBy          String
+  message            String?
+  snapshotStorageKey String
+  createdAt          DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model CompileJob {
+  id               String    @id @default(uuid())
+  projectId        String
+  userId           String
+  entryFileId      String?
+  targetFormat     String
+  status           String
+  log              String?
+  outputStorageKey String?
+  shareSlug        String?   @unique
+  createdAt        DateTime  @default(now())
+  startedAt        DateTime?
+  finishedAt       DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model AiTask {
+  id             String   @id @default(uuid())
+  projectId      String
+  userId         String
+  conversationId String?
+  status         String
+  prompt         String
+  diffJson       Json?
+  log            String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation AiConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId])
+}
+
+model AiConversation {
+  id        String   @id @default(uuid())
+  projectId String
+  userId    String
+  title     String?
+  stage     String   @default("consultation")
+  summary   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  AiMessage[]
+  tasks     AiTask[]
+  artifacts AiArtifact[]
+
+  @@index([projectId, userId, updatedAt])
+}
+
+model AiMessage {
+  id             String   @id @default(uuid())
+  conversationId String
+  role           String
+  content        String
+  metadata       Json?
+  aiTaskId       String?
+  createdAt      DateTime @default(now())
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model AiArtifact {
+  id             String   @id @default(uuid())
+  projectId      String
+  conversationId String
+  type           String
+  status         String
+  contentJson    Json
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, conversationId, type, status])
+  @@index([conversationId, updatedAt])
+}

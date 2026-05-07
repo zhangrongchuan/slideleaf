@@ -1,0 +1,20 @@
+{
+  "name": "@slideleaf/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@slideleaf/renderer": "workspace:*",
+    "@slideleaf/storage": "workspace:*",
+    "@slideleaf/workspace": "workspace:*",
+    "bullmq": "^5.34.2",
+    "dotenv": "^16.4.7"
+  }
+}

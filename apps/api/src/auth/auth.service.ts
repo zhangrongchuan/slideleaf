@@ -1,0 +1,138 @@
+import {
+  BadRequestException,
+  Injectable,
+  UnauthorizedException
+} from "@nestjs/common";
+import type { Request, Response } from "express";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import { PrismaService } from "../prisma/prisma.service.js";
+
+type SessionPayload = {
+  sub: string;
+  email: string;
+};
+
+export type RequestUser = {
+  id: string;
+  email: string;
+  name: string | null;
+};
+
+const COOKIE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 14;
+
+@Injectable()
+export class AuthService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async register(input: { email?: string; password?: string; name?: string | null }): Promise<RequestUser> {
+    const email = normalizeEmail(input.email);
+    const password = input.password ?? "";
+    if (password.length < 8) {
+      throw new BadRequestException("Password must be at least 8 characters long");
+    }
+
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      throw new BadRequestException("Email is already registered");
+    }
+
+    const user = await this.prisma.user.create({
+      data: {
+        email,
+        name: input.name?.trim() || null,
+        password: await bcrypt.hash(password, 12)
+      }
+    });
+
+    return toRequestUser(user);
+  }
+
+  async login(input: { email?: string; password?: string }): Promise<RequestUser> {
+    const email = normalizeEmail(input.email);
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user || !(await bcrypt.compare(input.password ?? "", user.password))) {
+      throw new UnauthorizedException("Invalid email or password");
+    }
+
+    return toRequestUser(user);
+  }
+
+  async me(request: Request): Promise<RequestUser> {
+    return this.requireUser(request);
+  }
+
+  async requireUser(request: Request): Promise<RequestUser> {
+    const token = this.readToken(request);
+    if (!token) {
+      throw new UnauthorizedException("Not signed in");
+    }
+
+    try {
+      const payload = jwt.verify(token, jwtSecret()) as SessionPayload;
+      const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+      if (!user) {
+        throw new UnauthorizedException("User not found");
+      }
+      return toRequestUser(user);
+    } catch (error) {
+      if (error instanceof UnauthorizedException) throw error;
+      throw new UnauthorizedException("Invalid session");
+    }
+  }
+
+  setSessionCookie(response: Response, user: RequestUser): void {
+    const token = jwt.sign({ sub: user.id, email: user.email } satisfies SessionPayload, jwtSecret(), {
+      expiresIn: "14d"
+    });
+    response.cookie(cookieName(), token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: COOKIE_MAX_AGE_MS,
+      path: "/"
+    });
+  }
+
+  clearSessionCookie(response: Response): void {
+    response.clearCookie(cookieName(), { path: "/" });
+  }
+
+  private readToken(request: Request): string | undefined {
+    const cookieToken = request.cookies?.[cookieName()];
+    if (typeof cookieToken === "string" && cookieToken) return cookieToken;
+
+    const header = request.headers.authorization;
+    if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length);
+
+    return undefined;
+  }
+}
+
+function normalizeEmail(email: string | undefined): string {
+  const normalized = email?.trim().toLowerCase();
+  if (!normalized || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalized)) {
+    throw new BadRequestException("A valid email is required");
+  }
+  return normalized;
+}
+
+function jwtSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret === "replace-me") {
+    throw new Error("JWT_SECRET must be configured");
+  }
+  return secret;
+}
+
+function cookieName(): string {
+  return process.env.SESSION_COOKIE_NAME || "slideleaf_session";
+}
+
+function toRequestUser(user: { id: string; email: string; name: string | null }): RequestUser {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name
+  };
+}
