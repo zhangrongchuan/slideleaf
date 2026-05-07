@@ -36,7 +36,7 @@ export class AiController {
   async generateArtifact(
     @Req() request: Request,
     @Param("projectId") projectId: string,
-    @Body() body: { conversationId?: string; type?: string; instruction?: string; provider?: string }
+    @Body() body: { conversationId?: string; type?: string; instruction?: string; provider?: string; density?: string }
   ) {
     const user = await this.auth.requireUser(request);
     return this.ai.generateArtifact(user.id, projectId, body);
@@ -63,6 +63,7 @@ export class AiController {
       instruction?: string;
       selectedText?: string | null;
       provider?: string;
+      density?: string;
     }
   ) {
     const user = await this.auth.requireUser(request);

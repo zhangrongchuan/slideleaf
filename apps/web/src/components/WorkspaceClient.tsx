@@ -36,6 +36,7 @@ type Project = {
 
 type ProjectRole = "owner" | "editor" | "viewer";
 type AiProvider = "deepseek" | "gemini";
+type DeckTextDensity = "concise" | "balanced" | "dense";
 
 type ProjectMember = {
   id: string;
@@ -142,6 +143,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   const [aiInstruction, setAiInstruction] = useState("");
   const [aiMode, setAiMode] = useState<AiMode>("auto");
   const [aiProvider, setAiProvider] = useState<AiProvider>("deepseek");
+  const [deckTextDensity, setDeckTextDensity] = useState<DeckTextDensity>("balanced");
   const [lastAiPrompt, setLastAiPrompt] = useState("");
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
   const [aiTask, setAiTask] = useState<AiTask | null>(null);
@@ -494,7 +496,8 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
           conversationId: aiConversation?.id,
           fileId: selectedFile?.kind === "file" && !selectedFile.isBinary ? selectedFile.id : undefined,
           instruction: prompt,
-          provider: aiProvider
+          provider: aiProvider,
+          density: deckTextDensity
         })
       });
       setAiTask(data.task);
@@ -524,7 +527,8 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
           conversationId: aiConversation?.id,
           type,
           instruction: prompt || displayLabel || undefined,
-          provider: aiProvider
+          provider: aiProvider,
+          density: deckTextDensity
         })
       });
       setNotice(`${artifactLabel(type)} updated`);
@@ -742,6 +746,7 @@ Return complete replacement workspace files for review. Preserve the chosen deck
               instruction={aiInstruction}
               mode={aiMode}
               provider={aiProvider}
+              textDensity={deckTextDensity}
               canEdit={canEdit}
               lastPrompt={lastAiPrompt}
               workflowRun={workflowRun}
@@ -751,6 +756,7 @@ Return complete replacement workspace files for review. Preserve the chosen deck
               onInstructionChange={setAiInstruction}
               onModeChange={setAiMode}
               onProviderChange={setAiProvider}
+              onTextDensityChange={setDeckTextDensity}
               onAsk={requestAiEdit}
               onGenerateArtifact={generateWorkflowArtifact}
               onGenerateHtml={generateHtmlFromPlan}
@@ -963,6 +969,7 @@ function AssistantPane({
   instruction,
   mode,
   provider,
+  textDensity,
   canEdit,
   lastPrompt,
   workflowRun,
@@ -972,6 +979,7 @@ function AssistantPane({
   onInstructionChange,
   onModeChange,
   onProviderChange,
+  onTextDensityChange,
   onAsk,
   onGenerateArtifact,
   onGenerateHtml,
@@ -984,6 +992,7 @@ function AssistantPane({
   instruction: string;
   mode: AiMode;
   provider: AiProvider;
+  textDensity: DeckTextDensity;
   canEdit: boolean;
   lastPrompt: string;
   workflowRun: WorkflowRun | null;
@@ -993,6 +1002,7 @@ function AssistantPane({
   onInstructionChange: (value: string) => void;
   onModeChange: (value: AiMode) => void;
   onProviderChange: (value: AiProvider) => void;
+  onTextDensityChange: (value: DeckTextDensity) => void;
   onAsk: () => void;
   onGenerateArtifact: (type: ArtifactType, promptOverride?: string, displayLabel?: string) => void;
   onGenerateHtml: () => void;
@@ -1154,9 +1164,10 @@ function AssistantPane({
               placeholder={canEdit ? "Describe the deck, refine the direction, or ask for changes..." : "View-only access: prompts are private and editing is disabled."}
             />
             <div className="flex items-center justify-between gap-2 px-1 pt-1">
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <ModePicker value={mode} onChange={onModeChange} />
                 <ModelPicker value={provider} onChange={onProviderChange} />
+                <TextDensityPicker value={textDensity} onChange={onTextDensityChange} />
                 <div className="truncate text-xs text-slate-400">
                   {mode === "auto" ? `Auto uses ${shortStageLabel(conversation?.stage ?? "consultation")}` : shortStageLabel(mode)}
                 </div>
@@ -1288,6 +1299,44 @@ function ModelPicker({ value, onChange }: { value: AiProvider; onChange: (value:
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function TextDensityPicker({
+  value,
+  onChange
+}: {
+  value: DeckTextDensity;
+  onChange: (value: DeckTextDensity) => void;
+}) {
+  const options: Array<{ value: DeckTextDensity; label: string; title: string }> = [
+    { value: "concise", label: "简洁", title: "每页尽量少字，偏视觉表达" },
+    { value: "balanced", label: "中等", title: "内容和视觉平衡" },
+    { value: "dense", label: "复杂", title: "信息更满，适合汇报和资料型页面" }
+  ];
+
+  return (
+    <div
+      className="inline-flex h-9 overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-0.5"
+      aria-label="Slide text density"
+      title="控制每页文字密度"
+    >
+      {options.map((item) => (
+        <button
+          key={item.value}
+          type="button"
+          onClick={() => onChange(item.value)}
+          className={`rounded-md px-2.5 text-xs font-semibold transition ${
+            item.value === value
+              ? "bg-slate-950 text-white shadow-sm"
+              : "text-slate-600 hover:bg-white hover:text-slate-900"
+          }`}
+          title={item.title}
+        >
+          {item.label}
+        </button>
+      ))}
     </div>
   );
 }

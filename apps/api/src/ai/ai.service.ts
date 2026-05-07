@@ -5,6 +5,7 @@ import { PrismaService } from "../prisma/prisma.service.js";
 import { ProjectsService } from "../projects/projects.service.js";
 import { nameFor, normalizeClientPath, parentPathFor } from "../workspace-paths.js";
 import {
+  SLIDELEAF_ROOT_PROMPT,
   artifactLabel,
   buildArtifactSystemPrompt,
   isArtifactType,
@@ -42,6 +43,8 @@ type WorkspaceTextFile = {
   mimeType: string | null;
   contentText: string;
 };
+
+type SlideTextDensity = "concise" | "balanced" | "dense";
 
 type AiConversationMessage = {
   role: "user" | "assistant";
@@ -109,13 +112,14 @@ export class AiService {
   async generateArtifact(
     userId: string,
     projectId: string,
-    body: { conversationId?: string; type?: string; instruction?: string; provider?: string }
+    body: { conversationId?: string; type?: string; instruction?: string; provider?: string; density?: string }
   ) {
     const timer = new TimingLogger("ai-artifact", `${projectId}:${body.type ?? "unknown"}`);
     await this.projects.assertAccess(userId, projectId, "editor");
     if (!isArtifactType(body.type)) throw new BadRequestException("Invalid AI artifact type");
     const conversation = await this.getOrCreateProjectConversation(userId, projectId, body.conversationId);
     const instruction = body.instruction?.trim() || `Generate ${artifactLabel(body.type)} for this deck.`;
+    const density = normalizeSlideTextDensity(body.density);
     const requestStartedAt = Date.now();
     const aiConfig = resolveAiConfig(body.provider);
     timer.mark("auth_conversation_config", {
@@ -155,7 +159,7 @@ export class AiService {
         conversationId: conversation.id,
         role: "user",
         content: instruction,
-        metadata: { workflowAction: `generate_${body.type}` }
+        metadata: { workflowAction: `generate_${body.type}`, textDensity: density }
       }
     });
     timer.mark("persist_user_message", { userMessageId: userMessage.id });
@@ -165,6 +169,7 @@ export class AiService {
         type: body.type,
         config: aiConfig,
         instruction,
+        density,
         conversationSummary: conversation.summary ?? undefined,
         conversationMessages: messages,
         artifacts,
@@ -283,12 +288,14 @@ export class AiService {
       instruction?: string;
       selectedText?: string | null;
       provider?: string;
+      density?: string;
     }
   ) {
     const timer = new TimingLogger("ai-edit", projectId);
     await this.projects.assertAccess(userId, projectId, "editor");
     const instruction = body.instruction?.trim();
     if (!instruction) throw new BadRequestException("instruction is required");
+    const density = normalizeSlideTextDensity(body.density);
     const requestStartedAt = Date.now();
     timer.mark("auth_validate", {
       hasSelectedFile: Boolean(body.fileId),
@@ -347,7 +354,8 @@ export class AiService {
         aiTaskId: task.id,
         metadata: {
           selectedFilePath: selectedFile?.path ?? null,
-          selectedText: body.selectedText ?? null
+          selectedText: body.selectedText ?? null,
+          textDensity: density
         }
       }
     });
@@ -398,6 +406,7 @@ export class AiService {
         taskId: task.id,
         config: aiConfig,
         instruction,
+        density,
         files: textFiles,
         conversationSummary: conversation.summary ?? undefined,
         conversationMessages,
@@ -672,6 +681,7 @@ async function requestAiWorkspaceRewrite(input: {
   taskId: string;
   config: AiProviderConfig;
   instruction: string;
+  density: SlideTextDensity;
   files: WorkspaceTextFile[];
   conversationSummary?: string;
   conversationMessages: AiConversationMessage[];
@@ -699,6 +709,7 @@ async function requestAiWorkspaceRewrite(input: {
       role: "user",
       content: JSON.stringify({
         instruction: input.instruction,
+        textDensity: buildSlideTextDensityContext(input.density),
         selectedFilePath: input.selectedFilePath ?? null,
         selectedText: input.selectedText ?? null,
         workflowArtifacts: input.artifacts.map((artifact) => ({
@@ -753,6 +764,7 @@ async function requestAiArtifact(input: {
   type: ArtifactType;
   config: AiProviderConfig;
   instruction: string;
+  density: SlideTextDensity;
   files: WorkspaceTextFile[];
   conversationSummary?: string;
   conversationMessages: AiConversationMessage[];
@@ -777,6 +789,7 @@ async function requestAiArtifact(input: {
       role: "user",
       content: JSON.stringify({
         instruction: input.instruction,
+        textDensity: buildSlideTextDensityContext(input.density),
         conversationSummary: input.conversationSummary ?? null,
         workflowArtifacts: input.artifacts.map((artifact) => ({
           type: artifact.type,
@@ -947,7 +960,9 @@ async function requestAnthropicText(input: {
 }
 
 function buildAiSystemPrompt(conversationSummary?: string): string {
-  return `You are generating or editing a production-quality HTML-first presentation workspace for SlideLeaf.
+  return `${SLIDELEAF_ROOT_PROMPT}
+
+You are currently generating or editing a production-quality HTML-first presentation workspace for SlideLeaf.
 Return only the file-block format below. Do not include markdown fences, explanations, or JSON.
 
 <slideleaf-workspace>
@@ -984,7 +999,12 @@ Viewport and density rules:
 - Every slide must fit a 16:9 viewport without scrolling.
 - Use .slide { width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; }.
 - Use clamp() for major font sizes and spacing.
-- Keep content density controlled: 4-6 bullets maximum, 3-6 cards maximum, and split dense content into more slides.
+- Honor the structured textDensity field from the user message as a global deck preference:
+  - concise: very low text density, often one title plus 1-2 short phrases; roughly 10-25 Chinese characters or 5-12 English words of body copy where possible.
+  - balanced: moderate text density, usually 2-4 short bullets or compact cards; roughly 30-70 Chinese characters or 20-45 English words of body copy.
+  - dense: fuller analytical slides using most of the canvas; roughly 80-150 Chinese characters or 60-110 English words of body copy, but still no scrolling.
+- These are targets, not rigid limits. Title slides, transitions, charts, and closing slides may be naturally lighter.
+- Keep content density controlled: 4-6 bullets maximum, 3-6 cards maximum, and split overly dense content into more slides.
 - Images and diagrams must have viewport-relative max dimensions.
 - Include prefers-reduced-motion support.
 
@@ -1295,6 +1315,40 @@ function normalizeBaseUrl(input: string): string {
 function parsePositiveInt(input: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(input ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function normalizeSlideTextDensity(input: string | undefined): SlideTextDensity {
+  const normalized = input?.trim().toLowerCase();
+  if (normalized === "concise") return "concise";
+  if (normalized === "dense" || normalized === "complex") return "dense";
+  return "balanced";
+}
+
+function buildSlideTextDensityContext(density: SlideTextDensity) {
+  if (density === "concise") {
+    return {
+      value: "concise",
+      label: "简洁",
+      intent: "Low text density. Favor visual storytelling, strong action titles, and very short body copy.",
+      target: "Usually one title plus 1-2 short phrases per slide; roughly 10-25 Chinese characters or 5-12 English words of body copy where possible."
+    };
+  }
+
+  if (density === "dense") {
+    return {
+      value: "dense",
+      label: "复杂",
+      intent: "High information density. Use more of the canvas for analytical content, tables, timelines, diagrams, and fuller explanations.",
+      target: "Roughly 80-150 Chinese characters or 60-110 English words of body copy per content slide, while still fitting the 16:9 viewport without scrolling."
+    };
+  }
+
+  return {
+    value: "balanced",
+    label: "中等",
+    intent: "Balanced text density. Keep slides presentation-friendly while giving enough explanation to stand alone.",
+    target: "Usually 2-4 short bullets or compact cards; roughly 30-70 Chinese characters or 20-45 English words of body copy per content slide."
+  };
 }
 
 function titleFromInstruction(instruction: string): string {
