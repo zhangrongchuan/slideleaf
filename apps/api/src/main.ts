@@ -18,7 +18,7 @@ async function bootstrap(): Promise<void> {
   });
   app.enableCors({
     origin: [
-      process.env.WEB_URL ?? "http://localhost:3000",
+      webOrigin(process.env.WEB_URL, "http://localhost:3000"),
       "http://127.0.0.1:3000"
     ],
     credentials: true
@@ -33,3 +33,8 @@ bootstrap().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
+function webOrigin(input: string | undefined, fallback: string): string {
+  const value = input?.trim() || fallback;
+  return /^https?:\/\//i.test(value) ? value.replace(/\/+$/, "") : `https://${value.replace(/\/+$/, "")}`;
+}

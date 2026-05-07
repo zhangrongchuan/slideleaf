@@ -36,7 +36,7 @@ export class AiController {
   async generateArtifact(
     @Req() request: Request,
     @Param("projectId") projectId: string,
-    @Body() body: { conversationId?: string; type?: string; instruction?: string }
+    @Body() body: { conversationId?: string; type?: string; instruction?: string; provider?: string }
   ) {
     const user = await this.auth.requireUser(request);
     return this.ai.generateArtifact(user.id, projectId, body);
@@ -56,7 +56,14 @@ export class AiController {
   async editFile(
     @Req() request: Request,
     @Param("projectId") projectId: string,
-    @Body() body: { conversationId?: string; fileId?: string; instruction?: string; selectedText?: string | null }
+    @Body()
+    body: {
+      conversationId?: string;
+      fileId?: string;
+      instruction?: string;
+      selectedText?: string | null;
+      provider?: string;
+    }
   ) {
     const user = await this.auth.requireUser(request);
     return { task: await this.ai.editFile(user.id, projectId, body) };

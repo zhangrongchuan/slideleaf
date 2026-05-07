@@ -43,4 +43,41 @@ export class ProjectsController {
     const user = await this.auth.requireUser(request);
     return this.projects.remove(user.id, projectId);
   }
+
+  @Get(":projectId/members")
+  async members(@Req() request: Request, @Param("projectId") projectId: string) {
+    const user = await this.auth.requireUser(request);
+    return { members: await this.projects.listMembers(user.id, projectId) };
+  }
+
+  @Post(":projectId/members")
+  async inviteMember(
+    @Req() request: Request,
+    @Param("projectId") projectId: string,
+    @Body() body: { email?: string; role?: string }
+  ) {
+    const user = await this.auth.requireUser(request);
+    return { member: await this.projects.inviteMember(user.id, projectId, body) };
+  }
+
+  @Patch(":projectId/members/:memberId")
+  async updateMember(
+    @Req() request: Request,
+    @Param("projectId") projectId: string,
+    @Param("memberId") memberId: string,
+    @Body() body: { role?: string }
+  ) {
+    const user = await this.auth.requireUser(request);
+    return { member: await this.projects.updateMemberRole(user.id, projectId, memberId, body) };
+  }
+
+  @Delete(":projectId/members/:memberId")
+  async removeMember(
+    @Req() request: Request,
+    @Param("projectId") projectId: string,
+    @Param("memberId") memberId: string
+  ) {
+    const user = await this.auth.requireUser(request);
+    return this.projects.removeMember(user.id, projectId, memberId);
+  }
 }

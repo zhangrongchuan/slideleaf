@@ -10,6 +10,7 @@ RUN find . -name "*.tsbuildinfo" -delete \
   && find . -name "*.tsbuildinfo" -delete \
   && node node_modules/typescript/bin/tsc -p packages/shared/tsconfig.json \
   && node node_modules/typescript/bin/tsc -p packages/storage/tsconfig.json \
+  && node node_modules/typescript/bin/tsc -p packages/renderer/tsconfig.json \
   && node node_modules/typescript/bin/tsc -p packages/workspace/tsconfig.json \
   && node node_modules/typescript/bin/tsc -p apps/api/tsconfig.json
 

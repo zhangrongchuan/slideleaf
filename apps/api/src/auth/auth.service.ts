@@ -3,6 +3,7 @@ import {
   Injectable,
   UnauthorizedException
 } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -17,6 +18,12 @@ export type RequestUser = {
   id: string;
   email: string;
   name: string | null;
+};
+
+export type GoogleProfile = {
+  email?: string;
+  email_verified?: boolean;
+  name?: string;
 };
 
 const COOKIE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 14;
@@ -58,6 +65,28 @@ export class AuthService {
     return toRequestUser(user);
   }
 
+  async loginWithGoogleProfile(profile: GoogleProfile): Promise<RequestUser> {
+    const email = normalizeEmail(profile.email);
+    if (profile.email_verified === false) {
+      throw new UnauthorizedException("Google email is not verified");
+    }
+
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      return toRequestUser(existing);
+    }
+
+    const user = await this.prisma.user.create({
+      data: {
+        email,
+        name: profile.name?.trim() || null,
+        password: await bcrypt.hash(`google:${randomUUID()}`, 12)
+      }
+    });
+
+    return toRequestUser(user);
+  }
+
   async me(request: Request): Promise<RequestUser> {
     return this.requireUser(request);
   }
@@ -87,15 +116,19 @@ export class AuthService {
     });
     response.cookie(cookieName(), token, {
       httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      sameSite: sameSitePolicy(),
+      secure: secureCookie(),
       maxAge: COOKIE_MAX_AGE_MS,
       path: "/"
     });
   }
 
   clearSessionCookie(response: Response): void {
-    response.clearCookie(cookieName(), { path: "/" });
+    response.clearCookie(cookieName(), {
+      path: "/",
+      sameSite: sameSitePolicy(),
+      secure: secureCookie()
+    });
   }
 
   private readToken(request: Request): string | undefined {
@@ -127,6 +160,17 @@ function jwtSecret(): string {
 
 function cookieName(): string {
   return process.env.SESSION_COOKIE_NAME || "slideleaf_session";
+}
+
+function sameSitePolicy(): "lax" | "strict" | "none" {
+  const configured = process.env.SESSION_COOKIE_SAME_SITE?.toLowerCase();
+  if (configured === "strict" || configured === "none") return configured;
+  if (process.env.NODE_ENV === "production") return "none";
+  return "lax";
+}
+
+function secureCookie(): boolean {
+  return process.env.NODE_ENV === "production" || sameSitePolicy() === "none";
 }
 
 function toRequestUser(user: { id: string; email: string; name: string | null }): RequestUser {

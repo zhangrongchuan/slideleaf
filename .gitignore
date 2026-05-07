@@ -80,4 +80,4 @@ Desktop.ini
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.example.json
-DEPLOYMENT.md
+.env_real

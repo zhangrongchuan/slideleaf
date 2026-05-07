@@ -109,7 +109,7 @@ export class AiService {
   async generateArtifact(
     userId: string,
     projectId: string,
-    body: { conversationId?: string; type?: string; instruction?: string }
+    body: { conversationId?: string; type?: string; instruction?: string; provider?: string }
   ) {
     const timer = new TimingLogger("ai-artifact", `${projectId}:${body.type ?? "unknown"}`);
     await this.projects.assertAccess(userId, projectId, "editor");
@@ -117,7 +117,7 @@ export class AiService {
     const conversation = await this.getOrCreateProjectConversation(userId, projectId, body.conversationId);
     const instruction = body.instruction?.trim() || `Generate ${artifactLabel(body.type)} for this deck.`;
     const requestStartedAt = Date.now();
-    const aiConfig = resolveAiConfig();
+    const aiConfig = resolveAiConfig(body.provider);
     timer.mark("auth_conversation_config", {
       conversationId: conversation.id,
       type: body.type,
@@ -277,7 +277,13 @@ export class AiService {
   async editFile(
     userId: string,
     projectId: string,
-    body: { conversationId?: string; fileId?: string; instruction?: string; selectedText?: string | null }
+    body: {
+      conversationId?: string;
+      fileId?: string;
+      instruction?: string;
+      selectedText?: string | null;
+      provider?: string;
+    }
   ) {
     const timer = new TimingLogger("ai-edit", projectId);
     await this.projects.assertAccess(userId, projectId, "editor");
@@ -354,7 +360,7 @@ export class AiService {
     });
     timer.mark("persist_task_user_message", { taskId: task.id });
 
-    const aiConfig = resolveAiConfig();
+    const aiConfig = resolveAiConfig(body.provider);
     console.log(
       `[ai] task=${task.id} conversation=${conversation.id} start provider=${aiConfig.provider} model=${aiConfig.model} files=${textFiles.length} chars=${contextCharCount} history=${conversationMessages.length} selected=${selectedFile?.path ?? "none"}`
     );
@@ -1201,16 +1207,22 @@ type AiProviderConfig = {
   anthropicVersion?: string;
 };
 
-function resolveAiConfig(): AiProviderConfig {
-  const rawProvider = (process.env.AI_PROVIDER || "deepseek").toLowerCase();
+function resolveAiConfig(providerOverride?: string): AiProviderConfig {
+  const normalizedOverride = providerOverride?.trim().toLowerCase();
+  if (normalizedOverride && normalizedOverride !== "deepseek" && normalizedOverride !== "gemini") {
+    throw new BadRequestException("AI provider must be deepseek or gemini");
+  }
+  const rawProvider = (normalizedOverride || process.env.AI_PROVIDER || "deepseek").toLowerCase();
   const provider: AiProviderConfig["provider"] =
-    rawProvider === "openai"
-      ? "openai"
-      : rawProvider === "gemini"
+    rawProvider === "gemini"
         ? "gemini"
-        : rawProvider === "anthropic" || rawProvider === "claude"
-          ? "anthropic"
-          : "deepseek";
+        : rawProvider === "deepseek"
+          ? "deepseek"
+          : rawProvider === "openai"
+            ? "openai"
+            : rawProvider === "anthropic" || rawProvider === "claude"
+              ? "anthropic"
+              : "deepseek";
 
   if (provider === "deepseek") {
     return {

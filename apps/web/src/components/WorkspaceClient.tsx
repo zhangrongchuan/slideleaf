@@ -19,6 +19,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  Users,
   X
 } from "lucide-react";
 import { BrandMark } from "./BrandMark";
@@ -30,6 +31,22 @@ type Project = {
   id: string;
   title: string;
   description?: string | null;
+  currentUserRole?: ProjectRole;
+};
+
+type ProjectRole = "owner" | "editor" | "viewer";
+type AiProvider = "deepseek" | "gemini";
+
+type ProjectMember = {
+  id: string;
+  userId: string;
+  role: ProjectRole;
+  createdAt: string;
+  user: {
+    id: string;
+    email: string;
+    name?: string | null;
+  };
 };
 
 type ProjectFile = {
@@ -124,6 +141,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   const [aiArtifacts, setAiArtifacts] = useState<AiArtifact[]>([]);
   const [aiInstruction, setAiInstruction] = useState("");
   const [aiMode, setAiMode] = useState<AiMode>("auto");
+  const [aiProvider, setAiProvider] = useState<AiProvider>("deepseek");
   const [lastAiPrompt, setLastAiPrompt] = useState("");
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
   const [aiTask, setAiTask] = useState<AiTask | null>(null);
@@ -131,6 +149,10 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   const [previewNonce, setPreviewNonce] = useState(0);
   const [activeTab, setActiveTab] = useState<CenterTab>("assistant");
   const [logOpen, setLogOpen] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [members, setMembers] = useState<ProjectMember[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<ProjectRole>("editor");
   const [leftWidth, setLeftWidth] = useState(260);
   const [centerWidth, setCenterWidth] = useState(560);
   const [dragTarget, setDragTarget] = useState<DragTarget>(null);
@@ -144,6 +166,9 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   const sortedFiles = useMemo(() => sortWorkspaceFiles(files), [files]);
   const previewSrc = compileJob?.shareSlug ? `${API_URL}/share/${compileJob.shareSlug}?v=${previewNonce}` : "";
   const compileLog = compileJob?.log || "No compile job yet.";
+  const currentRole = project?.currentUserRole ?? "viewer";
+  const canEdit = currentRole === "owner" || currentRole === "editor";
+  const isOwner = currentRole === "owner";
 
   useEffect(() => {
     void loadProject();
@@ -226,6 +251,63 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     setAiArtifacts(data.artifacts);
   }
 
+  async function loadMembers() {
+    const data = await apiFetch<{ members: ProjectMember[] }>(`/projects/${projectId}/members`);
+    setMembers(data.members);
+  }
+
+  async function openMembersPanel() {
+    setMembersOpen((value) => !value);
+    if (!membersOpen) {
+      await loadMembers().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  async function inviteMember(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!isOwner || !inviteEmail.trim()) return;
+    setError("");
+    try {
+      await apiFetch<{ member: ProjectMember }>(`/projects/${projectId}/members`, {
+        method: "POST",
+        body: JSON.stringify({ email: inviteEmail, role: inviteRole })
+      });
+      setInviteEmail("");
+      await loadMembers();
+      setNotice("Member invited");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function changeMemberRole(memberId: string, role: ProjectRole) {
+    if (!isOwner) return;
+    setError("");
+    try {
+      await apiFetch<{ member: ProjectMember }>(`/projects/${projectId}/members/${memberId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ role })
+      });
+      await loadMembers();
+      setNotice("Member role updated");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function removeMember(member: ProjectMember) {
+    if (!isOwner) return;
+    if (!window.confirm(`Remove ${member.user.email} from this project?`)) return;
+    setError("");
+    try {
+      await apiFetch(`/projects/${projectId}/members/${member.id}`, { method: "DELETE" });
+      await loadMembers();
+      setNotice("Member removed");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   function openEntry(file: ProjectFile) {
     setSelectedFileId(file.id);
     setActiveTab("file");
@@ -239,6 +321,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function saveFile() {
+    if (!canEdit) return;
     if (!selectedFile || selectedFile.kind !== "file" || selectedFile.isBinary) return;
     setError("");
     const data = await apiFetch<{ file: ProjectFile }>(`/projects/${projectId}/files/${selectedFile.id}`, {
@@ -256,6 +339,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
 
   async function createWorkspaceEntry(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canEdit) return;
     setError("");
     try {
       const data = await apiFetch<{ file: ProjectFile }>(`/projects/${projectId}/files`, {
@@ -275,6 +359,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function renameSelected() {
+    if (!canEdit) return;
     if (!selectedFile) return;
     const nextPath = window.prompt("New workspace path", selectedFile.path);
     if (!nextPath || nextPath === selectedFile.path) return;
@@ -292,6 +377,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function deleteSelected() {
+    if (!canEdit) return;
     if (!selectedFile) return;
     if (!window.confirm(`Delete ${selectedFile.path}?`)) return;
     setError("");
@@ -307,6 +393,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function uploadAsset(fileList: FileList | null) {
+    if (!canEdit) return;
     const file = fileList?.[0];
     if (!file) return;
     const formData = new FormData();
@@ -370,6 +457,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function requestAiEdit() {
+    if (!canEdit) return;
     if (!aiInstruction.trim()) return;
     await submitAiByMode(aiInstruction.trim());
   }
@@ -388,6 +476,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function submitAiPrompt(prompt: string, displayLabel?: string) {
+    if (!canEdit) return;
     setError("");
     setLastAiPrompt(displayLabel || prompt);
     setAiInstruction("");
@@ -400,7 +489,8 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         body: JSON.stringify({
           conversationId: aiConversation?.id,
           fileId: selectedFile?.kind === "file" && !selectedFile.isBinary ? selectedFile.id : undefined,
-          instruction: prompt
+          instruction: prompt,
+          provider: aiProvider
         })
       });
       setAiTask(data.task);
@@ -412,6 +502,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function generateWorkflowArtifact(type: ArtifactType, promptOverride?: string, displayLabel?: string) {
+    if (!canEdit) return;
     const prompt = promptOverride?.trim() || aiInstruction.trim();
     const visiblePrompt = displayLabel || prompt || `Generate ${artifactLabel(type)}`;
     setError("");
@@ -428,7 +519,8 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         body: JSON.stringify({
           conversationId: aiConversation?.id,
           type,
-          instruction: prompt || displayLabel || undefined
+          instruction: prompt || displayLabel || undefined,
+          provider: aiProvider
         })
       });
       setNotice(`${artifactLabel(type)} updated`);
@@ -442,6 +534,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function generateHtmlFromPlan() {
+    if (!canEdit) return;
     if (htmlGenerationRequested || aiTask?.status === "running") return;
     setHtmlGenerationRequested(true);
     const customPrompt = aiInstruction.trim();
@@ -452,6 +545,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function applyAiTask() {
+    if (!canEdit) return;
     if (!aiTask || aiTask.status !== "needs_review") return;
     setError("");
     try {
@@ -471,6 +565,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function rejectAiTask() {
+    if (!canEdit) return;
     if (!aiTask || aiTask.id === "pending") return;
     await apiFetch(`/projects/${projectId}/ai/tasks/${aiTask.id}/reject`, { method: "POST" }).catch(() => undefined);
     setAiTask(null);
@@ -495,10 +590,16 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         <div className="flex flex-wrap items-center gap-2">
           {notice ? <span className="text-xs text-emerald-300">{notice}</span> : null}
           <StatusPill status={compileJob?.status} />
+          <span className="rounded-full border border-white/10 bg-white/8 px-2 py-1 text-xs text-slate-300">
+            {roleLabel(currentRole)}
+          </span>
+          <ToolbarButton onClick={() => void openMembersPanel()} label="Members">
+            <Users size={16} />
+          </ToolbarButton>
           <ToolbarButton onClick={() => setLogOpen((value) => !value)} label="Compile Log">
             <Logs size={16} />
           </ToolbarButton>
-          <ToolbarButton onClick={saveFile} disabled={!dirty || activeTab !== "file"} label="Save">
+          <ToolbarButton onClick={saveFile} disabled={!canEdit || !dirty || activeTab !== "file"} label="Save">
             <Save size={16} />
           </ToolbarButton>
           <ToolbarButton onClick={() => void compile()} primary label="Compile HTML">
@@ -508,7 +609,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
           {/* <ToolbarButton onClick={createSnapshot} label="Snapshot">
             <History size={16} />
           </ToolbarButton> */}
-          <ToolbarButton onClick={() => uploadRef.current?.click()} label="Upload asset">
+          <ToolbarButton onClick={() => uploadRef.current?.click()} disabled={!canEdit} label="Upload asset">
             <Upload size={16} />
           </ToolbarButton>
           <input
@@ -542,6 +643,21 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
             </pre>
           </div>
         ) : null}
+
+        {membersOpen ? (
+          <MembersPanel
+            members={members}
+            isOwner={isOwner}
+            inviteEmail={inviteEmail}
+            inviteRole={inviteRole}
+            onInviteEmailChange={setInviteEmail}
+            onInviteRoleChange={setInviteRole}
+            onInvite={inviteMember}
+            onRoleChange={changeMemberRole}
+            onRemove={removeMember}
+            onClose={() => setMembersOpen(false)}
+          />
+        ) : null}
       </header>
 
       <section
@@ -553,6 +669,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         <FilesPane
           files={sortedFiles}
           selectedFileId={selectedFileId}
+          canEdit={canEdit}
           newKind={newKind}
           newPath={newPath}
           onNewKindChange={setNewKind}
@@ -592,6 +709,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
               file={selectedFile}
               content={content}
               dirty={dirty}
+              canEdit={canEdit}
               onContentChange={(value) => {
                 setContent(value);
                 setDirty(true);
@@ -607,6 +725,8 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
               artifacts={aiArtifacts}
               instruction={aiInstruction}
               mode={aiMode}
+              provider={aiProvider}
+              canEdit={canEdit}
               lastPrompt={lastAiPrompt}
               workflowRun={workflowRun}
               task={aiTask}
@@ -614,6 +734,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
               error={error}
               onInstructionChange={setAiInstruction}
               onModeChange={setAiMode}
+              onProviderChange={setAiProvider}
               onAsk={requestAiEdit}
               onGenerateArtifact={generateWorkflowArtifact}
               onGenerateHtml={generateHtmlFromPlan}
@@ -635,9 +756,116 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   );
 }
 
+function MembersPanel({
+  members,
+  isOwner,
+  inviteEmail,
+  inviteRole,
+  onInviteEmailChange,
+  onInviteRoleChange,
+  onInvite,
+  onRoleChange,
+  onRemove,
+  onClose
+}: {
+  members: ProjectMember[];
+  isOwner: boolean;
+  inviteEmail: string;
+  inviteRole: ProjectRole;
+  onInviteEmailChange: (value: string) => void;
+  onInviteRoleChange: (value: ProjectRole) => void;
+  onInvite: (event: React.FormEvent<HTMLFormElement>) => void;
+  onRoleChange: (memberId: string, role: ProjectRole) => void;
+  onRemove: (member: ProjectMember) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="absolute right-4 top-[48px] z-30 w-[520px] max-w-[calc(100vw-32px)] overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-950 shadow-[0_24px_80px_rgba(15,23,42,0.22)]">
+      <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold">
+        <span>Project Members</span>
+        <button onClick={onClose} className="rounded-md p-1 hover:bg-slate-200">
+          <X size={15} />
+        </button>
+      </div>
+      <div className="space-y-3 p-3">
+        <p className="text-xs leading-5 text-slate-500">
+          Members share project files and compiled output. AI conversations and prompts stay private to each user.
+        </p>
+
+        {isOwner ? (
+          <form onSubmit={onInvite} className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2 sm:grid-cols-[1fr_120px_auto]">
+            <input
+              value={inviteEmail}
+              onChange={(event) => onInviteEmailChange(event.target.value)}
+              type="email"
+              placeholder="member@email.com"
+              className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+            />
+            <RoleSelect value={inviteRole} onChange={onInviteRoleChange} />
+            <button className="h-9 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800">
+              Invite
+            </button>
+          </form>
+        ) : null}
+
+        <div className="max-h-[360px] space-y-2 overflow-auto">
+          {members.map((member) => (
+            <div key={member.id} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-slate-900">
+                  {member.user.name || member.user.email}
+                </div>
+                <div className="truncate text-xs text-slate-500">{member.user.email}</div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {isOwner ? (
+                  <RoleSelect value={member.role} onChange={(role) => onRoleChange(member.id, role)} />
+                ) : (
+                  <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">
+                    {roleLabel(member.role)}
+                  </span>
+                )}
+                {isOwner ? (
+                  <button
+                    onClick={() => onRemove(member)}
+                    className="grid h-8 w-8 place-items-center rounded-lg border border-red-100 bg-red-50 text-red-700 transition hover:bg-red-100"
+                    title="Remove member"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+          {!members.length ? (
+            <div className="rounded-lg border border-dashed border-slate-300 p-3 text-sm text-slate-500">
+              No members loaded.
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RoleSelect({ value, onChange }: { value: ProjectRole; onChange: (value: ProjectRole) => void }) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value as ProjectRole)}
+      className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+    >
+      <option value="owner">Owner</option>
+      <option value="editor">Edit</option>
+      <option value="viewer">View</option>
+    </select>
+  );
+}
+
 function FilesPane({
   files,
   selectedFileId,
+  canEdit,
   newKind,
   newPath,
   onNewKindChange,
@@ -647,6 +875,7 @@ function FilesPane({
 }: {
   files: ProjectFile[];
   selectedFileId: string;
+  canEdit: boolean;
   newKind: "file" | "folder";
   newPath: string;
   onNewKindChange: (kind: "file" | "folder") => void;
@@ -661,6 +890,7 @@ function FilesPane({
         <div className="flex gap-1.5">
           <select
             value={newKind}
+            disabled={!canEdit}
             onChange={(event) => onNewKindChange(event.target.value as "file" | "folder")}
             className="h-9 w-24 rounded-lg border border-slate-300 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
           >
@@ -669,10 +899,15 @@ function FilesPane({
           </select>
           <input
             value={newPath}
+            disabled={!canEdit}
             onChange={(event) => onNewPathChange(event.target.value)}
             className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-2 text-xs outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
           />
-          <button className="grid h-9 w-9 place-items-center rounded-lg border border-slate-300 bg-white text-slate-700 transition hover:border-blue-300 hover:text-blue-700" title="Create">
+          <button
+            disabled={!canEdit}
+            className="grid h-9 w-9 place-items-center rounded-lg border border-slate-300 bg-white text-slate-700 transition hover:border-blue-300 hover:text-blue-700 disabled:opacity-40"
+            title={canEdit ? "Create" : "View-only members cannot create files"}
+          >
             {newKind === "file" ? <FilePlus2 size={15} /> : <FolderPlus size={15} />}
           </button>
         </div>
@@ -707,6 +942,8 @@ function AssistantPane({
   artifacts,
   instruction,
   mode,
+  provider,
+  canEdit,
   lastPrompt,
   workflowRun,
   task,
@@ -714,6 +951,7 @@ function AssistantPane({
   error,
   onInstructionChange,
   onModeChange,
+  onProviderChange,
   onAsk,
   onGenerateArtifact,
   onGenerateHtml,
@@ -725,6 +963,8 @@ function AssistantPane({
   artifacts: AiArtifact[];
   instruction: string;
   mode: AiMode;
+  provider: AiProvider;
+  canEdit: boolean;
   lastPrompt: string;
   workflowRun: WorkflowRun | null;
   task: AiTask | null;
@@ -732,6 +972,7 @@ function AssistantPane({
   error: string;
   onInstructionChange: (value: string) => void;
   onModeChange: (value: AiMode) => void;
+  onProviderChange: (value: AiProvider) => void;
   onAsk: () => void;
   onGenerateArtifact: (type: ArtifactType, promptOverride?: string, displayLabel?: string) => void;
   onGenerateHtml: () => void;
@@ -776,6 +1017,7 @@ function AssistantPane({
               stage={conversation?.stage ?? "consultation"}
               artifacts={artifacts}
               running={busy}
+              canEdit={canEdit}
               htmlGenerationRequested={htmlGenerationRequested}
               onGenerateArtifact={onGenerateArtifact}
               onGenerateHtml={onGenerateHtml}
@@ -831,11 +1073,19 @@ function AssistantPane({
                     {task.diffJson?.summary ? <div className="mt-1 text-sm text-slate-600">{task.diffJson.summary}</div> : null}
                   </div>
                   <div className="flex shrink-0 gap-2">
-                    <button onClick={onApply} className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-sm text-white">
+                    <button
+                      onClick={onApply}
+                      disabled={!canEdit}
+                      className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-sm text-white disabled:opacity-40"
+                    >
                       <Check size={15} />
                       Apply
                     </button>
-                    <button onClick={onReject} className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm">
+                    <button
+                      onClick={onReject}
+                      disabled={!canEdit}
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-40"
+                    >
                       <X size={15} />
                       Reject
                     </button>
@@ -870,6 +1120,7 @@ function AssistantPane({
             <textarea
               value={instruction}
               onChange={(event) => onInstructionChange(event.target.value)}
+              disabled={!canEdit}
               onKeyDown={(event) => {
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                   event.preventDefault();
@@ -877,19 +1128,20 @@ function AssistantPane({
                 }
               }}
               rows={3}
-              className="block max-h-40 min-h-[78px] w-full resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400"
-              placeholder="Ask SlideLeaf to generate or revise the deck..."
+              className="block max-h-40 min-h-[78px] w-full resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:text-slate-400"
+              placeholder={canEdit ? "Ask SlideLeaf to generate or revise the deck..." : "View-only access: prompts are private and editing is disabled."}
             />
             <div className="flex items-center justify-between gap-2 px-1 pt-1">
               <div className="flex min-w-0 items-center gap-2">
                 <ModePicker value={mode} onChange={onModeChange} />
+                <ModelPicker value={provider} onChange={onProviderChange} />
                 <div className="truncate text-xs text-slate-400">
                   {mode === "auto" ? `Auto uses ${stageLabel(conversation?.stage ?? "consultation")}` : stageLabel(mode)}
                 </div>
               </div>
               <button
                 onClick={onAsk}
-                disabled={!hasPrompt || busy}
+                disabled={!canEdit || !hasPrompt || busy}
                 className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white shadow-[0_10px_22px_rgba(15,23,42,0.18)] transition hover:bg-slate-800 disabled:opacity-40"
               >
                 <Send size={15} />
@@ -928,6 +1180,61 @@ function ModePicker({ value, onChange }: { value: AiMode; onChange: (value: AiMo
         onClick={() => setOpen((current) => !current)}
         className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-800 transition hover:border-slate-300 hover:bg-white"
         title="AI mode"
+      >
+        {selected.label}
+        <ChevronDown size={14} className={`text-slate-400 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open ? (
+        <div className="absolute bottom-[42px] left-0 z-40 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white p-1 shadow-[0_24px_70px_rgba(15,23,42,0.22)]">
+          {options.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                onChange(item.value);
+                setOpen(false);
+              }}
+              className={`flex w-full items-start justify-between gap-3 rounded-lg px-3 py-2 text-left transition ${
+                item.value === value ? "bg-slate-950 text-white" : "text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              <span>
+                <span className="block text-sm font-semibold">{item.label}</span>
+                <span className={`mt-0.5 block text-xs ${item.value === value ? "text-slate-300" : "text-slate-500"}`}>
+                  {item.description}
+                </span>
+              </span>
+              {item.value === value ? <Check size={15} className="mt-0.5 shrink-0" /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ModelPicker({ value, onChange }: { value: AiProvider; onChange: (value: AiProvider) => void }) {
+  const [open, setOpen] = useState(false);
+  const options: Array<{ value: AiProvider; label: string; description: string }> = [
+    { value: "deepseek", label: "DeepSeek", description: "Long-form generation" },
+    { value: "gemini", label: "Gemini", description: "Fast planning and drafting" }
+  ];
+  const selected = options.find((item) => item.value === value) ?? options[0];
+
+  return (
+    <div
+      className="relative"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-800 transition hover:border-slate-300 hover:bg-white"
+        title="AI model"
       >
         {selected.label}
         <ChevronDown size={14} className={`text-slate-400 transition ${open ? "rotate-180" : ""}`} />
@@ -1002,6 +1309,7 @@ function StageActionCard({
   stage,
   artifacts,
   running,
+  canEdit,
   htmlGenerationRequested,
   onGenerateArtifact,
   onGenerateHtml
@@ -1009,6 +1317,7 @@ function StageActionCard({
   stage: WorkflowStage;
   artifacts: AiArtifact[];
   running: boolean;
+  canEdit: boolean;
   htmlGenerationRequested: boolean;
   onGenerateArtifact: (type: ArtifactType, promptOverride?: string, displayLabel?: string) => void;
   onGenerateHtml: () => void;
@@ -1035,7 +1344,7 @@ function StageActionCard({
                 The agent will use the latest brief and plan as source of truth, then return files for review.
               </p>
             </div>
-            {!htmlGenerationRequested && !running ? (
+            {!htmlGenerationRequested && !running && canEdit ? (
               <button
                   onClick={onGenerateHtml}
                   className="inline-flex h-9 items-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800"
@@ -1061,7 +1370,7 @@ function StageActionCard({
                       currentArtifact ? `Refine ${artifactLabel(artifactType)}` : `Generate ${artifactLabel(artifactType)}`
                     )
                   }
-                  disabled={running}
+                  disabled={running || !canEdit}
                   className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-sm text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
                 >
                   <Sparkles size={14} />
@@ -1074,6 +1383,7 @@ function StageActionCard({
               <ArtifactPreview
                 artifact={currentArtifact}
                 running={running}
+                canEdit={canEdit}
                 onStartPlan={() =>
                   onGenerateArtifact(
                     "slide_plan",
@@ -1100,24 +1410,27 @@ function StageActionCard({
 function ArtifactPreview({
   artifact,
   running,
+  canEdit,
   onStartPlan,
   onGenerateHtml,
   htmlGenerationRequested
 }: {
   artifact: AiArtifact;
   running: boolean;
+  canEdit: boolean;
   onStartPlan: () => void;
   onGenerateHtml: () => void;
   htmlGenerationRequested: boolean;
 }) {
   if (artifact.type === "brief") {
-    return <BriefArtifact artifact={artifact} running={running} onStartPlan={onStartPlan} />;
+    return <BriefArtifact artifact={artifact} running={running} canEdit={canEdit} onStartPlan={onStartPlan} />;
   }
   if (artifact.type === "slide_plan") {
     return (
       <PlanArtifact
         artifact={artifact}
         running={running}
+        canEdit={canEdit}
         htmlGenerationRequested={htmlGenerationRequested}
         onGenerateHtml={onGenerateHtml}
       />
@@ -1139,10 +1452,12 @@ function ArtifactPreview({
 function BriefArtifact({
   artifact,
   running,
+  canEdit,
   onStartPlan
 }: {
   artifact: AiArtifact;
   running: boolean;
+  canEdit: boolean;
   onStartPlan: () => void;
 }) {
   const data = asRecord(artifact.contentJson);
@@ -1186,7 +1501,7 @@ function BriefArtifact({
       <ArtifactList title="Still unclear" items={unknowns} tone="amber" />
       <ArtifactList title="Questions for you" items={questions} tone="blue" />
 
-      {readyForPlan ? (
+      {readyForPlan && canEdit ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-3">
           <div>
             <div className="text-sm font-semibold text-emerald-950">Brief is clear enough to plan</div>
@@ -1211,11 +1526,13 @@ function BriefArtifact({
 function PlanArtifact({
   artifact,
   running,
+  canEdit,
   htmlGenerationRequested,
   onGenerateHtml
 }: {
   artifact: AiArtifact;
   running: boolean;
+  canEdit: boolean;
   htmlGenerationRequested: boolean;
   onGenerateHtml: () => void;
 }) {
@@ -1257,7 +1574,7 @@ function PlanArtifact({
         </pre>
       )}
 
-      {!htmlGenerationRequested && !running ? (
+      {!htmlGenerationRequested && !running && canEdit ? (
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-3">
         <div>
           <div className="text-sm font-semibold text-blue-950">Plan is ready for generation</div>
@@ -1403,6 +1720,7 @@ function EditorPane({
   file,
   content,
   dirty,
+  canEdit,
   onContentChange,
   onSave,
   onRename,
@@ -1411,6 +1729,7 @@ function EditorPane({
   file: ProjectFile;
   content: string;
   dirty: boolean;
+  canEdit: boolean;
   onContentChange: (value: string) => void;
   onSave: () => void;
   onRename: () => void;
@@ -1424,13 +1743,13 @@ function EditorPane({
           {dirty ? <span className="ml-2 text-xs text-blue-700">unsaved</span> : null}
         </div>
         <div className="flex gap-1">
-          <button onClick={onSave} disabled={!dirty || file.kind !== "file" || file.isBinary} className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-xs transition hover:bg-slate-50 disabled:opacity-50">
+          <button onClick={onSave} disabled={!canEdit || !dirty || file.kind !== "file" || file.isBinary} className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-xs transition hover:bg-slate-50 disabled:opacity-50">
             Save
           </button>
-          <button onClick={onRename} className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-xs transition hover:bg-slate-50">
+          <button onClick={onRename} disabled={!canEdit} className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-xs transition hover:bg-slate-50 disabled:opacity-50">
             Rename
           </button>
-          <button onClick={onDelete} className="rounded-md border border-red-100 bg-red-50 px-2 py-0.5 text-xs text-red-700 transition hover:bg-red-100">
+          <button onClick={onDelete} disabled={!canEdit} className="rounded-md border border-red-100 bg-red-50 px-2 py-0.5 text-xs text-red-700 transition hover:bg-red-100 disabled:opacity-50">
             <Trash2 size={13} />
           </button>
         </div>
@@ -1447,7 +1766,8 @@ function EditorPane({
             fontSize: 14,
             wordWrap: "on",
             tabSize: 2,
-            scrollBeyondLastLine: false
+            scrollBeyondLastLine: false,
+            readOnly: !canEdit
           }}
         />
       ) : (
@@ -1618,6 +1938,12 @@ function StatusPill({ status }: { status?: CompileJob["status"] }) {
         ? "text-red-300"
         : "text-blue-300";
   return <span className={`text-xs ${color}`}>{status === "success" ? "Compiled" : status}</span>;
+}
+
+function roleLabel(role: ProjectRole): string {
+  if (role === "owner") return "Owner";
+  if (role === "editor") return "Edit";
+  return "View";
 }
 
 function DiffLine({ line }: { line: DiffLineValue }) {
