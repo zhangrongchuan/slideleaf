@@ -11,7 +11,6 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
   "image/gif",
-  "image/svg+xml",
   "image/webp"
 ]);
 

@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Param, Post, Req } from "@nestjs/common";
-import type { Request } from "express";
+import { Body, Controller, Get, Param, Post, Req, Res } from "@nestjs/common";
+import type { Request, Response } from "express";
 import type { CompileTargetFormat } from "@slideleaf/shared";
 import { AuthService } from "../auth/auth.service.js";
 import { CompileService } from "./compile.service.js";
@@ -31,4 +31,23 @@ export class CompileController {
     const user = await this.auth.requireUser(request);
     return { job: await this.compile.get(user.id, projectId, jobId) };
   }
+
+  @Get("compile-jobs/:jobId/download-html")
+  async downloadHtml(
+    @Req() request: Request,
+    @Param("projectId") projectId: string,
+    @Param("jobId") jobId: string,
+    @Res() response: Response
+  ) {
+    const user = await this.auth.requireUser(request);
+    const download = await this.compile.downloadHtml(user.id, projectId, jobId);
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.setHeader("content-disposition", contentDisposition(download.filename));
+    response.send(download.html);
+  }
+}
+
+function contentDisposition(filename: string): string {
+  const asciiName = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
 }

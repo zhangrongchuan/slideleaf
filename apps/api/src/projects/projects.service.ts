@@ -75,7 +75,7 @@ export class ProjectsService {
         createdByPath.set(filePath, created);
       }
 
-      const entry = createdByPath.get("slides/deck.html");
+      const entry = createdByPath.get("slides/01-title.html") ?? createdByPath.get("slides/deck.html");
       const updated = entry
         ? await tx.project.update({
             where: { id: project.id },

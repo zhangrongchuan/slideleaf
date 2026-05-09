@@ -79,7 +79,17 @@ Product principles:
     return `${base}
 
 Generate a concise creative brief from the user's request, project files, and conversation.
-If critical information is missing, ask no more than 3 high-signal clarification questions.
+Use this stage to standardize the model's understanding before any style or slide planning work.
+Apply these consulting/storytelling frameworks explicitly:
+- Pyramid Principle: start with the likely top-line answer, then identify the few supporting pillars and proof needed.
+- SCQA: frame the situation, complication, question, and provisional answer.
+- MECE: map the content into non-overlapping, collectively sufficient buckets; flag overlap or missing bucket risks.
+- Action Title discipline: capture early conclusion-style title hypotheses, not topic labels.
+- So What: define what the audience must conclude or do, and test whether each future slide should answer "so what?"
+If information is missing, ask every clarification question needed to make the deck genuinely usable.
+Do not cap the number of questions. Cover all material gaps that would affect audience fit, narrative, evidence, claims, design direction, slide count, language, tone, business context, constraints, and must-have content.
+Keep each question specific and answerable. Every question should map to a concrete decision risk, evidence gap, audience-fit gap, or narrative/design choice.
+Do not ask nice-to-have questions that would not change the deck.
 If enough information is present, keep unknowns and clarifyingQuestions empty.
 
 Schema:
@@ -96,6 +106,37 @@ Schema:
   "textDensity": "concise | balanced | dense",
   "mustInclude": ["specific content, facts, or moments"],
   "avoid": ["things that would make the deck weaker"],
+  "pyramidPrinciple": {
+    "topLineAnswer": "provisional conclusion the deck should lead with, or unknown",
+    "supportingPillars": ["MECE support pillar"],
+    "proofNeeded": ["proof required to make the top-line answer credible"]
+  },
+  "scqa": {
+    "situation": "current context the audience already understands",
+    "complication": "change, conflict, gap, or tension that makes the deck necessary",
+    "question": "central question the deck must answer",
+    "answer": "provisional answer, recommendation, or thesis"
+  },
+  "meceMap": {
+    "buckets": [
+      {
+        "label": "content bucket",
+        "included": ["what belongs in this bucket"],
+        "excluded": ["what should not be mixed into this bucket"],
+        "whyItMatters": "role in the argument"
+      }
+    ],
+    "overlapRisks": ["where the story may repeat itself or mix levels"]
+  },
+  "actionTitleCandidates": ["early conclusion-style title hypothesis"],
+  "soWhatTests": ["audience-level implication or decision test future slides must satisfy"],
+  "questionPlan": [
+    {
+      "question": "clarifying question",
+      "reason": "why this answer materially changes the deck",
+      "blocksStage": "brief | style | plan | generation"
+    }
+  ],
   "unknowns": ["missing inputs"],
   "clarifyingQuestions": ["question"]
 }`;
@@ -108,6 +149,11 @@ Generate 3 distinct visual directions for the deck. This is the show-don't-tell 
 Each direction must be visually distinctive, context-specific, and not a generic AI template.
 Avoid generic purple gradients, default centered cards, timid palettes, and undifferentiated glassmorphism.
 Use abstract CSS shapes, typography, color, motion, and composition. No remote scripts.
+Use the supplied playbookContext as a style library. If template-style entries are relevant, treat them as candidate visual systems:
+- Match first on audience, occasion, mood, tone, formality, density, and light/dark preference.
+- Produce three genuinely different candidates, not three minor palette variations.
+- You may reference a template-style direction by id/name, but transform it into SlideLeaf's renderer-owned fragment workflow.
+- Do not copy template navigation, keyboard handlers, or full-document structure.
 
 Each sampleSlideHtml should be a compact standalone HTML preview for one title slide:
 - It may include inline CSS.
@@ -141,8 +187,33 @@ Schema:
 
   return `${base}
 
-Generate one integrated deck plan and slide schema. Do not write HTML.
+Generate one integrated DeckPlan / Ghost Deck. Do not write HTML.
 Use the latest brief and visual direction as source of truth. If several visual directions exist, use the selected/recommended direction unless the user explicitly asks otherwise.
+Use playbookContext to preserve the selected style system, template direction, density, and QA constraints in globalStyle and per-slide component planning.
+
+Depth requirements:
+- This artifact must be information-rich enough to support a serious CEO/investor-grade deck.
+- Do not stop at a slide title list. Build a complete story, evidence map, and per-slide argument spec.
+- Every important claim needs either known evidence, a user-provided claim, an assumption, or an explicit missing-evidence placeholder.
+- Each slide must include concrete claims, content blocks, data needs, tension, implication, and transition logic.
+- Prefer dense planning over terse planning; the generated HTML can be concise later, but this artifact must preserve the full analytical intent.
+
+Narrative requirements:
+- Make the story arc explicit: starting belief, tension, turning point, resolution, and decision ask.
+- Each slide must say what narrative job it performs and how it moves from the previous slide to the next.
+- Include tension or contrast where useful; avoid flat descriptive sequencing.
+
+Evidence requirements:
+- Extract all known facts, user claims, assumptions, missing evidence, and source notes from the prompt, files, and prior artifacts.
+- Use evidence ids so slide claims can refer to evidence without repeating everything.
+- If a fact is missing, create a dataNeed with a fallback instruction instead of inventing a number.
+
+Component planning rules:
+- Plan each chart, matrix, roadmap, timeline, table, architecture diagram, and visual device as semantic HTML/CSS components.
+- Do not plan inline SVG, canvas, external chart libraries, remote assets, or per-slide JavaScript.
+- Use tables, grids, CSS bars, timeline rows, roadmap cards, matrix cells, and flow nodes that the shared theme can style consistently.
+- Only plan image-story when the slide genuinely needs a real product screenshot, uploaded image, generated bitmap, or photographic evidence.
+- The plan must describe what the component should communicate, what evidence it uses, and how it avoids becoming a generic card layout.
 
 Allowed layout archetypes:
 - hero-title
@@ -172,39 +243,157 @@ Content density rules:
 
 Schema:
 {
-  "narrativeArc": "overall argument or story logic",
-  "chosenDirection": {
-    "id": "direction id if available",
-    "name": "style name",
-    "reason": "why this direction was chosen"
+  "brief": {
+    "topic": "deck topic",
+    "audience": "target audience",
+    "objective": "business objective",
+    "tone": "presentation tone",
+    "language": "language preference",
+    "textDensity": "concise | balanced | dense"
   },
-  "designSystem": {
+  "mainThesis": "single controlling argument for the whole deck",
+  "narrativeArc": {
+    "startingBelief": "what the audience may currently believe",
+    "tension": "why that belief is incomplete, risky, or newly challenged",
+    "turningPoint": "the insight that reframes the situation",
+    "resolution": "the deck's answer or strategic thesis",
+    "decisionAsk": "specific decision, approval, investment, or next action requested",
+    "storylineBeats": ["ordered narrative beats across the deck"]
+  },
+  "evidencePack": {
+    "knownFacts": [
+      {
+        "id": "e1",
+        "statement": "specific fact available from prompt or files",
+        "type": "user-provided | file-derived | assumption | placeholder",
+        "appliesTo": ["slide id or theme"],
+        "confidence": "high | medium | low",
+        "source": "source note if available"
+      }
+    ],
+    "userClaims": [
+      {
+        "id": "c1",
+        "statement": "claim the user wants to make",
+        "type": "user-provided",
+        "appliesTo": ["slide id or theme"],
+        "confidence": "high | medium | low",
+        "source": "user prompt or file name"
+      }
+    ],
+    "assumptions": [
+      {
+        "id": "a1",
+        "statement": "assumption needed for the argument",
+        "type": "assumption",
+        "appliesTo": ["slide id or theme"],
+        "confidence": "low",
+        "source": "reason this assumption is needed"
+      }
+    ],
+    "missingEvidence": [
+      {
+        "id": "need1",
+        "label": "missing data or proof",
+        "purpose": "why this evidence matters",
+        "preferredFormat": "number | range | benchmark | ranking | quote | source | case-example",
+        "fallbackIfMissing": "how to label or handle it if not available",
+        "appliesTo": ["slide id or theme"]
+      }
+    ],
+    "sourceNotes": [
+      {
+        "id": "source1",
+        "label": "source name or placeholder",
+        "sourceType": "user | file | public source needed | assumption",
+        "note": "how the source should be used"
+      }
+    ]
+  },
+  "globalStyle": {
+    "chosenDirection": {
+      "id": "direction id if available",
+      "name": "style name",
+      "reason": "why this direction was chosen"
+    },
     "palette": ["#hex"],
     "typography": "font pairing and hierarchy",
     "motion": ["motion patterns"],
     "componentRules": ["rules for cards, diagrams, tables, navigation"],
     "antiPatterns": ["things generator must avoid"]
   },
-  "slides": [
+  "terminology": ["terms that should stay consistent"],
+  "evidencePlan": {
+    "knownEvidence": ["evidence available from the prompt or files"],
+    "missingEvidence": ["facts or metrics that need placeholders"]
+  },
+  "generationRules": {
+    "maxRepeatedVisualType": 2,
+    "maxBulletOnlySlides": 1,
+    "requiredAnalysisOperators": ["trend", "segmentation", "comparison", "decomposition", "prioritization", "roadmap", "risk", "synthesis"],
+    "requiredSlideRoles": ["context", "diagnosis", "analysis", "recommendation", "execution", "risk", "synthesis"],
+    "titleStyle": "action-title",
+    "oneMessagePerSlide": true
+  },
+  "sections": [
     {
-      "id": "s1",
-      "index": 1,
-      "layout": "one allowed layout archetype",
-      "visualRole": "opening impact | problem framing | evidence | explanation | transition | close",
-      "actionTitle": "clear claim, not a topic label",
-      "message": "main idea",
-      "supportingPoints": ["point"],
-      "contentBlocks": [
-        { "type": "headline | paragraph | bullets | metric | table | diagram-node | quote", "text": "content" }
-      ],
-      "visualTreatment": {
-        "composition": "how this slide should be arranged",
-        "motion": "specific reveal/build behavior",
-        "signatureElement": "style motif used on this slide"
-      },
-      "density": "low | medium | high",
-      "speakerIntent": "what presenter says or emphasizes",
-      "avoid": ["slide-specific mistakes"]
+      "id": "section-1",
+      "title": "section title",
+      "role": "context | diagnosis | analysis | recommendation | execution | risk | appendix",
+      "coreMessage": "section-level message",
+      "slides": [
+        {
+          "id": "s01",
+          "index": 1,
+          "title": "short page label",
+          "role": "opening | context | diagnosis | analysis | recommendation | execution | risk | synthesis | appendix",
+          "question": "specific question this page answers",
+          "actionTitle": "clear conclusion, not a topic label",
+          "coreMessage": "one message this page must prove",
+          "analysisOperator": "comparison | decomposition | trend | segmentation | causality | prioritization | scenario | roadmap | risk | synthesis",
+          "recommendedVisual": "bar-chart | line-chart | waterfall | 2x2-matrix | issue-tree | roadmap | comparison-table | executive-summary | risk-matrix | architecture-diagram | metric-system | narrative-timeline",
+          "requiredEvidence": ["evidence or placeholder needed"],
+          "dependencies": ["prior slide id if needed"],
+          "doNotCover": ["topics reserved for other slides"],
+          "motionPreset": "static | progressive-reveal | chart-build | matrix-positioning | flow-draw | focus-highlight | timeline-step | roadmap-build",
+          "narrativeFunction": "the exact story job this slide performs",
+          "transitionFromPrevious": "how this slide follows from the previous slide",
+          "transitionToNext": "what question or implication this slide sets up next",
+          "tension": "contrast, conflict, gap, or reason this slide is interesting",
+          "implication": "what the audience should conclude or do because of this slide",
+          "claims": [
+            {
+              "claim": "specific claim this slide will make",
+              "supportType": "metric | comparison | example | quote | case | logic",
+              "evidenceRequired": "evidence id, evidence need id, or explicit placeholder",
+              "confidence": "known | assumption | placeholder"
+            }
+          ],
+          "evidenceSlots": [
+            {
+              "id": "slot-s01-1",
+              "purpose": "what this proof slot must establish",
+              "evidenceIds": ["e1", "need1"],
+              "fallbackIfMissing": "how to mark the proof if evidence is absent"
+            }
+          ],
+          "contentBlocks": [
+            {
+              "role": "headline | proof-point | counterpoint | metric | comparison | case-example | method | implication | source-note",
+              "contentIntent": "what this block should communicate",
+              "mustInclude": ["specific terms, numbers, examples, labels, or evidence ids"]
+            }
+          ],
+          "dataNeeds": [
+            {
+              "label": "specific metric, benchmark, quote, or source needed",
+              "purpose": "why it matters for this slide",
+              "preferredFormat": "number | range | benchmark | ranking | quote | source | case-example",
+              "fallbackIfMissing": "placeholder or assumption wording"
+            }
+          ]
+        }
+      ]
     }
   ]
 }`;

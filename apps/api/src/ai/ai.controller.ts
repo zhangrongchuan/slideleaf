@@ -36,7 +36,7 @@ export class AiController {
   async generateArtifact(
     @Req() request: Request,
     @Param("projectId") projectId: string,
-    @Body() body: { conversationId?: string; type?: string; instruction?: string; provider?: string; density?: string }
+    @Body() body: { conversationId?: string; type?: string; instruction?: string; provider?: string; density?: string; customProvider?: unknown }
   ) {
     const user = await this.auth.requireUser(request);
     return this.ai.generateArtifact(user.id, projectId, body);
@@ -52,6 +52,16 @@ export class AiController {
     return this.ai.approveArtifact(user.id, projectId, artifactId);
   }
 
+  @Post("generate-deck")
+  async generateDeck(
+    @Req() request: Request,
+    @Param("projectId") projectId: string,
+    @Body() body: { conversationId?: string; planArtifactId?: string; provider?: string; density?: string; customProvider?: unknown }
+  ) {
+    const user = await this.auth.requireUser(request);
+    return this.ai.generateDeck(user.id, projectId, body);
+  }
+
   @Post("edit-file")
   async editFile(
     @Req() request: Request,
@@ -64,6 +74,7 @@ export class AiController {
       selectedText?: string | null;
       provider?: string;
       density?: string;
+      customProvider?: unknown;
     }
   ) {
     const user = await this.auth.requireUser(request);

@@ -8,6 +8,7 @@ COPY . .
 RUN find . -name "*.tsbuildinfo" -delete \
   && pnpm install --frozen-lockfile \
   && find . -name "*.tsbuildinfo" -delete \
+  && node node_modules/typescript/bin/tsc -p packages/ai-playbook/tsconfig.json \
   && node node_modules/typescript/bin/tsc -p packages/shared/tsconfig.json \
   && node node_modules/typescript/bin/tsc -p packages/storage/tsconfig.json \
   && node node_modules/typescript/bin/tsc -p packages/renderer/tsconfig.json \

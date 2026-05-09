@@ -27,7 +27,9 @@ type ProjectConfig = {
   entry?: string;
   slides?: string[];
   theme?: string;
+  runtime?: string;
   slideSize?: string;
+  generationMode?: string;
 };
 
 type ParsedSlide = {
@@ -55,6 +57,7 @@ export async function renderProject(options: RenderProjectOptions): Promise<Rend
     if (slidePaths.length === 0) {
       throw new Error("No slides configured. Add config.slides, config.entry, or an explicit entry.");
     }
+    logs.push(`Resolved ${slidePaths.length} configured slide${slidePaths.length === 1 ? "" : "s"}`);
 
     const themePath = config.theme ?? "themes/default.css";
     const themeCss = await readOptionalText(resolveInside(workspaceDir, themePath));
@@ -62,6 +65,13 @@ export async function renderProject(options: RenderProjectOptions): Promise<Rend
       await writeFile(path.join(outputDir, "theme.css"), themeCss, "utf8");
       logs.push(`Loaded theme ${themePath}`);
     }
+    const runtimePath = config.runtime ?? "runtime/deck.js";
+    const projectRuntimeJs = sanitizeRuntimeScript(await readOptionalText(resolveInside(workspaceDir, runtimePath)));
+    if (projectRuntimeJs) {
+      logs.push(`Loaded runtime ${runtimePath}`);
+    }
+    const runtimeJs = composeRuntimeScript(projectRuntimeJs, logs);
+    await writeFile(path.join(outputDir, "deck.js"), runtimeJs, "utf8");
 
     const assetsDir = path.join(workspaceDir, "assets");
     await cp(assetsDir, path.join(outputDir, "assets"), {
@@ -141,8 +151,27 @@ export async function renderProject(options: RenderProjectOptions): Promise<Rend
         continue;
       }
 
-      const parsed = parseFrontmatter(source);
       const sourceKind = slideSourceKindFor(slidePath);
+      if (sourceKind === "html" && isFullHtmlDocument(source)) {
+        errors.push({
+          file: slidePath,
+          message: "Multi-slide projects must use HTML fragments with one <section class=\"slide\"> root, not full HTML documents."
+        });
+        continue;
+      }
+
+      if (sourceKind === "html") {
+        const fragmentIssues = validateHtmlSlideFragment(source);
+        if (fragmentIssues.length) {
+          errors.push({
+            file: slidePath,
+            message: fragmentIssues.join(" ")
+          });
+          continue;
+        }
+      }
+
+      const parsed = parseFrontmatter(source);
       renderedSlides.push(renderSlide(parsed, slidePath, sourceKind));
       logs.push(`Rendered ${slidePath}`);
     }
@@ -159,7 +188,9 @@ export async function renderProject(options: RenderProjectOptions): Promise<Rend
     const html = renderDeckHtml({
       title: config.name ?? "SlideLeaf Presentation",
       slidesHtml: renderedSlides.join("\n"),
-      themeCss
+      themeCss,
+      runtimeJs,
+      slideCount: renderedSlides.length
     });
     const quality = analyzeHtmlQuality(html);
     logs.push(...formatQualityLogs(quality));
@@ -244,8 +275,8 @@ export function parseFrontmatter(source: string): ParsedSlide {
 }
 
 function resolveSlidePaths(config: ProjectConfig, explicitEntry?: string): string[] {
-  if (explicitEntry) return [explicitEntry];
   if (Array.isArray(config.slides) && config.slides.length > 0) return config.slides;
+  if (explicitEntry) return [explicitEntry];
   if (config.entry) return [config.entry];
   return [];
 }
@@ -292,6 +323,24 @@ function renderHtmlSlideContent(source: string, sourcePath: string): string {
 
 function hasSlideRoot(html: string): boolean {
   return /^\s*<(section|article)\b[^>]*\bclass=(["'])[^"']*\bslide\b[^"']*\2/i.test(html);
+}
+
+function validateHtmlSlideFragment(source: string): string[] {
+  const cleaned = sanitizeHtmlFragment(source).trim();
+  const issues: string[] = [];
+  const rootMatches = [
+    ...cleaned.matchAll(/<(section|article)\b[^>]*\bclass=(["'])[^"']*\bslide\b[^"']*\2[^>]*>/gi)
+  ];
+
+  if (rootMatches.length !== 1) {
+    issues.push("HTML slide fragments must contain exactly one <section class=\"slide\"> root.");
+  }
+
+  if (!/^\s*<(section|article)\b[^>]*\bclass=(["'])[^"']*\bslide\b[^"']*\2[^>]*>[\s\S]*<\/\1>\s*$/i.test(cleaned)) {
+    issues.push("HTML slide fragments must be a complete single root fragment, not partial markup or multiple top-level nodes.");
+  }
+
+  return issues;
 }
 
 function sanitizeHtmlFragment(source: string): string {
@@ -609,7 +658,8 @@ function splitReferenceSuffix(src: string): { basePath: string; suffix: string }
   };
 }
 
-function renderDeckHtml(options: { title: string; slidesHtml: string; themeCss: string }): string {
+function renderDeckHtml(options: { title: string; slidesHtml: string; themeCss: string; runtimeJs: string; slideCount: number }): string {
+  const initialCounter = options.slideCount > 0 ? `1 / ${options.slideCount}` : "1 / 1";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -625,6 +675,15 @@ ${options.themeCss}
   <main class="deck">
 ${options.slidesHtml}
   </main>
+  <nav class="slideleaf-nav" aria-label="Slide navigation">
+    <button type="button" data-prev-slide aria-label="Previous slide">Prev</button>
+    <span data-slide-counter aria-live="polite">${initialCounter}</span>
+    <button type="button" data-next-slide aria-label="Next slide">Next</button>
+  </nav>
+  <div class="slideleaf-progress" data-slide-progress></div>
+  <script>
+${options.runtimeJs}
+  </script>
 </body>
 </html>
 `;
@@ -636,7 +695,75 @@ function baseCss(): string {
 }
 
 body {
-  overflow-y: auto;
+  margin: 0;
+  overflow: hidden;
+}
+
+.deck {
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  position: relative;
+  overflow: hidden;
+}
+
+.slide {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  z-index: 0 !important;
+  box-sizing: border-box;
+}
+
+.slide.active {
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  z-index: 1 !important;
+}
+
+.slideleaf-nav {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.82);
+  color: white;
+  padding: 9px 12px;
+  font: 700 13px/1 system-ui, sans-serif;
+  backdrop-filter: blur(12px);
+}
+
+.slideleaf-nav button {
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  padding: 8px 11px;
+}
+
+.slideleaf-progress {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  z-index: 1001;
+  width: 0;
+  height: 5px;
+  background: var(--accent, #2563eb);
+  transition: width 0.25s ease;
 }
 
 .slide-kicker {
@@ -653,7 +780,104 @@ code {
   border-radius: 4px;
   padding: 0 0.25em;
 }
+
+[data-reveal] {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 `;
+}
+
+function composeRuntimeScript(projectRuntimeJs: string, logs: string[]): string {
+  const coreRuntime = defaultRuntimeJs();
+  const extensionRuntime = projectRuntimeJs.trim();
+  if (!extensionRuntime) return coreRuntime;
+  if (runtimeControlsDeckNavigation(extensionRuntime)) {
+    logs.push("Skipped project runtime deck controller because the renderer owns slide navigation and counters.");
+    return coreRuntime;
+  }
+  logs.push("Appended project runtime as a non-navigation extension.");
+  return `${coreRuntime}\n\n${extensionRuntime}`;
+}
+
+function runtimeControlsDeckNavigation(source: string): boolean {
+  return [
+    /querySelectorAll\(\s*(["'`])\.slide\1/i,
+    /classList\.(?:add|remove|toggle)\(\s*(["'`])active\1/i,
+    /\[data-(?:prev|next)-slide\]/i,
+    /data-slide-counter/i,
+    /addEventListener\(\s*(["'`])keydown\1/i,
+    /\bnav-ui\b/i,
+    /\bprogress-bar\b/i
+  ].some((pattern) => pattern.test(source));
+}
+
+function defaultRuntimeJs(): string {
+  return `(() => {
+  if (window.__slideleafDeckInitialized) return;
+  window.__slideleafDeckInitialized = true;
+  const slides = Array.from(document.querySelectorAll(".slide"));
+  const counter = document.querySelector("[data-slide-counter]");
+  const progress = document.querySelector("[data-slide-progress]");
+  let index = Math.max(0, slides.findIndex((slide) => slide.classList.contains("active")));
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reducedMotion) document.documentElement.dataset.reducedMotion = "true";
+  function updateReveals(slide, isActive) {
+    const reveals = Array.from(slide.querySelectorAll("[data-reveal]"));
+    reveals.forEach((element, revealIndex) => {
+      if (isActive) {
+        if (reducedMotion) {
+          element.classList.add("revealed");
+        } else {
+          window.setTimeout(() => element.classList.add("revealed"), revealIndex * 70);
+        }
+      } else {
+        element.classList.remove("revealed");
+      }
+    });
+  }
+  function setSlide(nextIndex) {
+    if (!slides.length) return;
+    index = (nextIndex + slides.length) % slides.length;
+    slides.forEach((slide, slideIndex) => {
+      const isActive = slideIndex === index;
+      slide.classList.toggle("active", isActive);
+      slide.setAttribute("aria-hidden", isActive ? "false" : "true");
+      updateReveals(slide, isActive);
+    });
+    if (counter) counter.textContent = String(index + 1) + " / " + String(slides.length);
+    if (progress instanceof HTMLElement) progress.style.width = String(((index + 1) / slides.length) * 100) + "%";
+    document.dispatchEvent(new CustomEvent("slideleaf:slidechange", {
+      detail: { index, count: slides.length, slide: slides[index] }
+    }));
+  }
+  function next() { setSlide(index + 1); }
+  function prev() { setSlide(index - 1); }
+  document.querySelector("[data-prev-slide]")?.addEventListener("click", prev);
+  document.querySelector("[data-next-slide]")?.addEventListener("click", next);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowRight" || event.key === " " || event.key === "Enter") next();
+    if (event.key === "ArrowLeft" || event.key === "Backspace") prev();
+  });
+  window.SlideLeafDeck = {
+    goTo: setSlide,
+    next,
+    prev,
+    getIndex: () => index,
+    getCount: () => slides.length
+  };
+  setSlide(index);
+})();`;
 }
 
 async function readOptionalText(filePath: string): Promise<string> {
@@ -665,6 +889,12 @@ async function readOptionalText(filePath: string): Promise<string> {
     }
     throw error;
   }
+}
+
+function sanitizeRuntimeScript(source: string): string {
+  return source
+    .replace(/<\/script/gi, "<\\/script")
+    .replace(/\b(?:fetch|XMLHttpRequest|WebSocket|EventSource)\s*\(/gi, "void(");
 }
 
 function resolveInside(rootDir: string, relativePath: string): string {

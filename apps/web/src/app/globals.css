@@ -82,6 +82,14 @@ textarea {
 .workspace-main {
   display: grid;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.workspace-main > * {
+  min-width: 0;
+  min-height: 0;
 }
 
 @media (max-width: 1050px) {

@@ -5,6 +5,7 @@ node_modules/
 
 # Environment and secrets
 .env
+.env_real
 .env.*
 !.env.example
 *.local
@@ -80,4 +81,3 @@ Desktop.ini
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.example.json
-.env_real

@@ -78,14 +78,21 @@ export const DEFAULT_PROJECT_FILES: ProjectTemplateFile[] = [
     kind: "folder"
   },
   {
+    path: "runtime",
+    kind: "folder"
+  },
+  {
     path: "project.config.json",
     kind: "file",
     mimeType: "application/json",
     contentText: JSON.stringify(
       {
         name: "Untitled Presentation",
-        entry: "slides/deck.html",
-        slideSize: "16:9"
+        slides: ["slides/01-title.html", "slides/02-workspace.html", "slides/03-architecture.html"],
+        theme: "themes/deck.css",
+        runtime: "runtime/deck.js",
+        slideSize: "16:9",
+        generationMode: "multi-slide"
       },
       null,
       2
@@ -376,6 +383,243 @@ p {
   </script>
 </body>
 </html>
+`
+  },
+  {
+    path: "slides/01-title.html",
+    kind: "file",
+    mimeType: "text/html",
+    contentText: `<section class="slide title-slide active" data-slide-id="s01" data-motion="progressive-reveal" data-visual="executive-summary">
+  <div class="slide-content narrow">
+    <div class="eyebrow">SlideLeaf Deck</div>
+    <h1>HTML-first Slides</h1>
+    <p class="lead" data-reveal>Edit focused slide files, compile them into one static presentation, and keep every page reviewable.</p>
+  </div>
+</section>
+`
+  },
+  {
+    path: "slides/02-workspace.html",
+    kind: "file",
+    mimeType: "text/html",
+    contentText: `<section class="slide" data-slide-id="s02" data-motion="progressive-reveal" data-visual="metric-system">
+  <div class="slide-content">
+    <div class="eyebrow">Core workflow</div>
+    <h1>Each slide stays modular while the deck stays coherent</h1>
+    <div class="card-grid three">
+      <article data-reveal>
+        <strong>Plan</strong>
+        <span>Freeze the narrative before writing HTML.</span>
+      </article>
+      <article data-reveal>
+        <strong>Generate</strong>
+        <span>Create one page at a time with local context.</span>
+      </article>
+      <article data-reveal>
+        <strong>Compile</strong>
+        <span>Renderer applies one runtime, theme, and QA gate.</span>
+      </article>
+    </div>
+  </div>
+</section>
+`
+  },
+  {
+    path: "slides/03-architecture.html",
+    kind: "file",
+    mimeType: "text/html",
+    contentText: `<section class="slide" data-slide-id="s03" data-motion="flow-draw" data-visual="architecture-diagram">
+  <div class="slide-content two-column">
+    <div>
+      <div class="eyebrow">Architecture</div>
+      <h1>Source files become one shareable presentation</h1>
+      <p>Fragments, theme, runtime, and assets compile into a portable static HTML deck.</p>
+    </div>
+    <div class="flow" aria-label="SlideLeaf compile flow">
+      <div data-reveal>DeckPlan</div>
+      <div data-reveal>Slide HTML fragments</div>
+      <div data-reveal>Theme + runtime</div>
+      <div data-reveal>Static share page</div>
+    </div>
+  </div>
+</section>
+`
+  },
+  {
+    path: "themes/deck.css",
+    kind: "file",
+    mimeType: "text/css",
+    contentText: `:root {
+  --bg: #f8fafc;
+  --fg: #0f172a;
+  --muted: #64748b;
+  --accent: #2563eb;
+  --accent-soft: #dbeafe;
+  --panel: #ffffff;
+  --border: #dbe3ef;
+}
+
+body {
+  margin: 0;
+  background: #07111f;
+  color: var(--fg);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+.slide {
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: none;
+  box-sizing: border-box;
+  padding: clamp(42px, 6vw, 76px);
+  background: linear-gradient(135deg, #ffffff 0%, #f3f7fb 100%);
+}
+
+.slide.active {
+  display: grid;
+}
+
+.slide-content {
+  width: min(1120px, 100%);
+  margin: auto;
+}
+
+.slide-content.narrow {
+  width: min(860px, 100%);
+  text-align: center;
+}
+
+.two-column {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.9fr);
+  gap: clamp(28px, 5vw, 64px);
+  align-items: center;
+}
+
+.eyebrow {
+  display: inline-flex;
+  margin-bottom: 20px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 8px 13px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  max-width: 980px;
+  font-size: clamp(42px, 5.6vw, 76px);
+  line-height: 0.98;
+  letter-spacing: 0;
+}
+
+p,
+.lead {
+  margin: 22px 0 0;
+  max-width: 760px;
+  color: var(--muted);
+  font-size: clamp(18px, 2vw, 24px);
+  line-height: 1.52;
+}
+
+.narrow p {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.card-grid {
+  display: grid;
+  gap: 18px;
+  margin-top: 34px;
+}
+
+.card-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.card-grid article,
+.flow div {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.08);
+}
+
+.card-grid article {
+  min-height: 150px;
+  padding: 24px;
+}
+
+.card-grid strong {
+  display: block;
+  color: var(--fg);
+  font-size: 22px;
+}
+
+.card-grid span {
+  display: block;
+  margin-top: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.flow {
+  display: grid;
+  gap: 12px;
+}
+
+.flow div {
+  padding: 18px 20px;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+@media (max-width: 900px) {
+  .two-column,
+  .card-grid.three {
+    grid-template-columns: 1fr;
+  }
+}
+`
+  },
+  {
+    path: "runtime/deck.js",
+    kind: "file",
+    mimeType: "application/javascript",
+    contentText: `(() => {
+  const slides = Array.from(document.querySelectorAll(".slide"));
+  const counter = document.querySelector("[data-slide-counter]");
+  const progress = document.querySelector("[data-slide-progress]");
+  let index = Math.max(0, slides.findIndex((slide) => slide.classList.contains("active")));
+
+  function setSlide(nextIndex) {
+    if (!slides.length) return;
+    slides[index]?.classList.remove("active");
+    index = (nextIndex + slides.length) % slides.length;
+    slides[index]?.classList.add("active");
+    if (counter) counter.textContent = String(index + 1) + " / " + String(slides.length);
+    if (progress instanceof HTMLElement) progress.style.width = String(((index + 1) / slides.length) * 100) + "%";
+  }
+
+  document.querySelector("[data-prev-slide]")?.addEventListener("click", () => setSlide(index - 1));
+  document.querySelector("[data-next-slide]")?.addEventListener("click", () => setSlide(index + 1));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowRight" || event.key === " ") setSlide(index + 1);
+    if (event.key === "ArrowLeft") setSlide(index - 1);
+  });
+
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    document.documentElement.dataset.reducedMotion = "true";
+  }
+  setSlide(index);
+})();
 `
   },
   {

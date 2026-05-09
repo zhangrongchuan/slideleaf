@@ -3,14 +3,20 @@
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Bot,
   Check,
+  CheckCircle2,
   ChevronDown,
+  Download,
+  Clock3,
+  FileCode2,
   FileText,
   FilePlus2,
   Folder,
   FolderPlus,
   History,
+  Loader2,
   Logs,
   Play,
   Save,
@@ -24,6 +30,16 @@ import {
 } from "lucide-react";
 import { BrandMark } from "./BrandMark";
 import { API_URL, apiFetch } from "../lib/api";
+import {
+  aiProviderRequestPayload,
+  isLocalAiProviderValue,
+  loadLocalAiProviders,
+  localProviderDisplayName,
+  parseLocalProviderValue,
+  type AiProviderValue,
+  type AiProviderRequestPayload,
+  type LocalAiProviderConfig
+} from "../lib/localAiProviders";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -35,7 +51,7 @@ type Project = {
 };
 
 type ProjectRole = "owner" | "editor" | "viewer";
-type AiProvider = "deepseek" | "gemini";
+type AiProvider = AiProviderValue;
 type DeckTextDensity = "concise" | "balanced" | "dense";
 
 type ProjectMember = {
@@ -78,12 +94,13 @@ type AiTask = {
   id: string;
   conversationId?: string | null;
   status: string;
+  prompt?: string | null;
   log?: string | null;
   diffJson?: {
     summary?: string;
     files?: Array<{
       path: string;
-      action?: "create" | "update";
+      action?: "create" | "update" | "delete";
       lines: DiffLineValue[];
     }>;
     lines?: DiffLineValue[];
@@ -125,6 +142,24 @@ type WorkflowRun = {
   type: ArtifactType;
   label: string;
 };
+type SubmitAction =
+  | { kind: "artifact"; type: ArtifactType }
+  | { kind: "edit" };
+
+const LEFT_MIN_WIDTH = 210;
+const LEFT_MAX_WIDTH = 420;
+const CENTER_MIN_WIDTH = 420;
+const CENTER_MAX_WIDTH = 900;
+const PREVIEW_MIN_WIDTH = 360;
+const RESIZE_HANDLE_WIDTH = 6;
+const WORKSPACE_STACK_BREAKPOINT = 1050;
+
+type AiWorkflowResponse = {
+  conversation: AiConversation;
+  messages: AiMessage[];
+  artifacts: AiArtifact[];
+  tasks?: AiTask[];
+};
 
 export function WorkspaceClient({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<Project | null>(null);
@@ -134,7 +169,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [newPath, setNewPath] = useState("slides/deck.html");
+  const [newPath, setNewPath] = useState("slides/04-new-slide.html");
   const [newKind, setNewKind] = useState<"file" | "folder">("file");
   const [compileJob, setCompileJob] = useState<CompileJob | null>(null);
   const [aiConversation, setAiConversation] = useState<AiConversation | null>(null);
@@ -143,6 +178,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   const [aiInstruction, setAiInstruction] = useState("");
   const [aiMode, setAiMode] = useState<AiMode>("auto");
   const [aiProvider, setAiProvider] = useState<AiProvider>("deepseek");
+  const [localAiProviders, setLocalAiProviders] = useState<LocalAiProviderConfig[]>([]);
   const [deckTextDensity, setDeckTextDensity] = useState<DeckTextDensity>("balanced");
   const [lastAiPrompt, setLastAiPrompt] = useState("");
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
@@ -158,6 +194,8 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   const [leftWidth, setLeftWidth] = useState(260);
   const [centerWidth, setCenterWidth] = useState(560);
   const [dragTarget, setDragTarget] = useState<DragTarget>(null);
+  const [workspaceWidth, setWorkspaceWidth] = useState(0);
+  const workspaceMainRef = useRef<HTMLElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const autoCompileStartedRef = useRef(false);
 
@@ -171,10 +209,69 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   const currentRole = project?.currentUserRole ?? "viewer";
   const canEdit = currentRole === "owner" || currentRole === "editor";
   const isOwner = currentRole === "owner";
+  const latestRunArtifact = useMemo(() => latestGenerationRun(aiArtifacts), [aiArtifacts]);
+  const latestRunStatus = latestRunArtifact ? textField(asRecord(latestRunArtifact.contentJson), "status") || latestRunArtifact.status : "";
+  const latestWorkflowArtifact = useMemo(() => latestRunningWorkflowArtifact(aiArtifacts), [aiArtifacts]);
+  const workspaceIsStacked = workspaceWidth > 0 && workspaceWidth <= WORKSPACE_STACK_BREAKPOINT;
+  const maxLeftWidth = useMemo(() => {
+    if (!workspaceWidth || workspaceIsStacked) return LEFT_MAX_WIDTH;
+    return Math.max(
+      LEFT_MIN_WIDTH,
+      Math.min(
+        LEFT_MAX_WIDTH,
+        workspaceWidth - CENTER_MIN_WIDTH - PREVIEW_MIN_WIDTH - RESIZE_HANDLE_WIDTH * 2
+      )
+    );
+  }, [workspaceIsStacked, workspaceWidth]);
+  const maxCenterWidth = useMemo(() => {
+    if (!workspaceWidth || workspaceIsStacked) return CENTER_MAX_WIDTH;
+    const boundedLeftWidth = Math.min(leftWidth, maxLeftWidth);
+    return Math.max(
+      CENTER_MIN_WIDTH,
+      Math.min(
+        CENTER_MAX_WIDTH,
+        workspaceWidth - boundedLeftWidth - PREVIEW_MIN_WIDTH - RESIZE_HANDLE_WIDTH * 2
+      )
+    );
+  }, [leftWidth, maxLeftWidth, workspaceIsStacked, workspaceWidth]);
+  const effectiveLeftWidth = Math.min(leftWidth, maxLeftWidth);
+  const effectiveCenterWidth = Math.min(centerWidth, maxCenterWidth);
+  const workspaceGridColumns = workspaceIsStacked
+    ? "1fr"
+    : `${effectiveLeftWidth}px ${RESIZE_HANDLE_WIDTH}px ${effectiveCenterWidth}px ${RESIZE_HANDLE_WIDTH}px minmax(${PREVIEW_MIN_WIDTH}px, 1fr)`;
+  const shouldPollAi =
+    Boolean(workflowRun) || aiTask?.status === "running" || latestRunStatus === "running" || Boolean(latestWorkflowArtifact);
 
   useEffect(() => {
     void loadProject();
   }, [projectId]);
+
+  useEffect(() => {
+    const refreshLocalProviders = () => setLocalAiProviders(loadLocalAiProviders());
+    refreshLocalProviders();
+    window.addEventListener("storage", refreshLocalProviders);
+    window.addEventListener("focus", refreshLocalProviders);
+    return () => {
+      window.removeEventListener("storage", refreshLocalProviders);
+      window.removeEventListener("focus", refreshLocalProviders);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isLocalAiProviderValue(aiProvider)) return;
+    const parsed = parseLocalProviderValue(aiProvider);
+    if (!localAiProviders.some((provider) => provider.id === parsed.id)) {
+      setAiProvider("deepseek");
+    }
+  }, [aiProvider, localAiProviders]);
+
+  useEffect(() => {
+    if (!shouldPollAi) return;
+    const interval = window.setInterval(() => {
+      void loadAiWorkflow().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    }, 1800);
+    return () => window.clearInterval(interval);
+  }, [shouldPollAi, projectId]);
 
   useEffect(() => {
     if (selectedFile && selectedFile.kind === "file" && !selectedFile.isBinary) {
@@ -184,13 +281,45 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }, [selectedFile?.id]);
 
   useEffect(() => {
+    const node = workspaceMainRef.current;
+    if (!node) return;
+
+    const updateWorkspaceWidth = () => {
+      setWorkspaceWidth(node.getBoundingClientRect().width);
+    };
+
+    updateWorkspaceWidth();
+    window.addEventListener("resize", updateWorkspaceWidth);
+
+    if (typeof ResizeObserver === "undefined") {
+      return () => window.removeEventListener("resize", updateWorkspaceWidth);
+    }
+
+    const observer = new ResizeObserver(updateWorkspaceWidth);
+    observer.observe(node);
+
+    return () => {
+      window.removeEventListener("resize", updateWorkspaceWidth);
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceWidth || workspaceIsStacked) return;
+    setLeftWidth((value) => Math.min(value, maxLeftWidth));
+    setCenterWidth((value) => Math.min(value, maxCenterWidth));
+  }, [maxCenterWidth, maxLeftWidth, workspaceIsStacked, workspaceWidth]);
+
+  useEffect(() => {
     if (!dragTarget) return;
 
     const onMove = (event: MouseEvent) => {
+      const workspaceLeft = workspaceMainRef.current?.getBoundingClientRect().left ?? 0;
+      const pointerX = event.clientX - workspaceLeft;
       if (dragTarget === "left") {
-        setLeftWidth(clamp(event.clientX, 210, 420));
+        setLeftWidth(clamp(pointerX, LEFT_MIN_WIDTH, maxLeftWidth));
       } else {
-        setCenterWidth(clamp(event.clientX - leftWidth, 420, 900));
+        setCenterWidth(clamp(pointerX - effectiveLeftWidth - RESIZE_HANDLE_WIDTH, CENTER_MIN_WIDTH, maxCenterWidth));
       }
     };
     const onUp = () => setDragTarget(null);
@@ -206,7 +335,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, [dragTarget, leftWidth]);
+  }, [dragTarget, effectiveLeftWidth, maxCenterWidth, maxLeftWidth]);
 
   async function loadProject() {
     setError("");
@@ -214,15 +343,14 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       const [projectData, filesData, aiData] = await Promise.all([
         apiFetch<{ project: Project }>(`/projects/${projectId}`),
         apiFetch<{ files: ProjectFile[] }>(`/projects/${projectId}/files`),
-        apiFetch<{ conversation: AiConversation; messages: AiMessage[]; artifacts: AiArtifact[] }>(
-          `/projects/${projectId}/ai/workflow`
-        )
+        apiFetch<AiWorkflowResponse>(`/projects/${projectId}/ai/workflow`)
       ]);
       setProject(projectData.project);
       setFiles(filesData.files);
       setAiConversation(aiData.conversation);
       setAiMessages(aiData.messages);
       setAiArtifacts(aiData.artifacts);
+      restoreAiTaskFromWorkflow(aiData.tasks, aiData.artifacts);
       setActiveTab("assistant");
 
       if (!autoCompileStartedRef.current) {
@@ -245,12 +373,29 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function loadAiWorkflow() {
-    const data = await apiFetch<{ conversation: AiConversation; messages: AiMessage[]; artifacts: AiArtifact[] }>(
-      `/projects/${projectId}/ai/workflow`
-    );
+    const data = await apiFetch<AiWorkflowResponse>(`/projects/${projectId}/ai/workflow`);
     setAiConversation(data.conversation);
     setAiMessages(data.messages);
     setAiArtifacts(data.artifacts);
+    restoreAiTaskFromWorkflow(data.tasks, data.artifacts);
+  }
+
+  function restoreAiTaskFromWorkflow(tasks: AiTask[] | undefined, artifacts: AiArtifact[]) {
+    const restorable = selectRestorableTask(tasks ?? [], artifacts);
+    if (restorable) {
+      setAiTask(restorable);
+    } else {
+      setAiTask((current) => (current?.status === "running" || current?.status === "failed" ? null : current));
+    }
+    const generationRun = latestGenerationRun(artifacts);
+    if (generationRun) {
+      const runStatus = textField(asRecord(generationRun.contentJson), "status") || generationRun.status;
+      if (runStatus === "running" || runStatus === "needs_review") setHtmlGenerationRequested(true);
+    }
+    if (!restorable || restorable.status !== "running") {
+      setLastAiPrompt("");
+      setWorkflowRun(null);
+    }
   }
 
   async function loadMembers() {
@@ -433,10 +578,10 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         );
         setCompileJob(data.job);
         if (data.job.status === "success" || data.job.status === "failed") {
-          if (data.job.status === "success") {
-            setPreviewNonce(Date.now());
-            setNotice(options.auto ? "Compiled current project" : "Compiled");
-          }
+          // if (data.job.status === "success") {
+          //   setPreviewNonce(Date.now());
+          //   setNotice(options.auto ? "Compiled current project" : "Compiled");
+          // }
           break;
         }
       }
@@ -461,21 +606,10 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   async function requestAiEdit() {
     if (!canEdit) return;
     if (!aiInstruction.trim()) return;
-    await submitAiByMode(aiInstruction.trim());
-  }
-
-  async function submitAiByMode(prompt: string) {
-    const mode = aiMode === "auto" ? aiConversation?.stage ?? "consultation" : aiMode;
-    if (mode === "consultation") {
-      await generateWorkflowArtifact("brief", prompt);
-      return;
-    }
-    if (mode === "visual_direction") {
-      await generateWorkflowArtifact("visual_direction", prompt);
-      return;
-    }
-    if (mode === "slide_plan") {
-      await generateWorkflowArtifact("slide_plan", prompt);
+    const prompt = aiInstruction.trim();
+    const action = resolveSubmitAction(aiMode, aiConversation?.stage);
+    if (action.kind === "artifact") {
+      await generateWorkflowArtifact(action.type, prompt);
       return;
     }
     await submitAiPrompt(prompt);
@@ -490,19 +624,22 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     setActiveTab("assistant");
     try {
       if (dirty) await saveFile();
+      const providerPayload = requireAiProviderPayload(aiProvider, localAiProviders);
       const data = await apiFetch<{ task: AiTask }>(`/projects/${projectId}/ai/edit-file`, {
         method: "POST",
         body: JSON.stringify({
           conversationId: aiConversation?.id,
           fileId: selectedFile?.kind === "file" && !selectedFile.isBinary ? selectedFile.id : undefined,
           instruction: prompt,
-          provider: aiProvider,
+          ...providerPayload,
           density: deckTextDensity
         })
       });
       setAiTask(data.task);
       await loadAiWorkflow();
-      setLastAiPrompt("");
+      if (data.task.status !== "running") {
+        setLastAiPrompt("");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -521,18 +658,23 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     if (type === "visual_direction" || type === "slide_plan") setHtmlGenerationRequested(false);
     try {
       if (dirty) await saveFile();
-      await apiFetch(`/projects/${projectId}/ai/workflow/artifacts`, {
+      const providerPayload = requireAiProviderPayload(aiProvider, localAiProviders);
+      const data = await apiFetch<{ artifact?: AiArtifact; task?: AiTask }>(`/projects/${projectId}/ai/workflow/artifacts`, {
         method: "POST",
         body: JSON.stringify({
           conversationId: aiConversation?.id,
           type,
           instruction: prompt || displayLabel || undefined,
-          provider: aiProvider,
+          ...providerPayload,
           density: deckTextDensity
         })
       });
-      setNotice(`${artifactLabel(type)} updated`);
+      if (data.task) setAiTask(data.task);
+      setNotice(`${artifactLabel(type)} started`);
       await loadAiWorkflow();
+      if (data.artifact?.status !== "failed") {
+        setAiTask((current) => (current?.status === "failed" ? null : current));
+      }
       setLastAiPrompt("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -545,11 +687,39 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     if (!canEdit) return;
     if (htmlGenerationRequested || aiTask?.status === "running") return;
     setHtmlGenerationRequested(true);
-    const customPrompt = aiInstruction.trim();
-    const prompt =
-      customPrompt ||
-      "Generate the final standalone HTML deck from the current brief and plan. Return complete workspace files for review.";
-    await submitAiPrompt(prompt, customPrompt ? undefined : "Generate HTML");
+    setError("");
+    setAiInstruction("");
+    setLastAiPrompt("Freeze DeckPlan and generate slides page by page");
+    setAiTask({ id: "pending", status: "running" });
+    setActiveTab("assistant");
+    try {
+      if (dirty) await saveFile();
+      const planArtifact =
+        latestArtifactForType(aiArtifacts, "slide_plan", "approved") ??
+        latestArtifactForType(aiArtifacts, "slide_plan");
+      if (!planArtifact) throw new Error("Create a DeckPlan before generating the deck.");
+      if (planArtifact.status !== "approved") {
+        await apiFetch(`/projects/${projectId}/ai/workflow/artifacts/${planArtifact.id}/approve`, {
+          method: "POST"
+        });
+      }
+      const providerPayload = requireAiProviderPayload(aiProvider, localAiProviders);
+      const data = await apiFetch<{ task: AiTask }>(`/projects/${projectId}/ai/generate-deck`, {
+        method: "POST",
+        body: JSON.stringify({
+          conversationId: aiConversation?.id,
+          planArtifactId: planArtifact.id,
+          ...providerPayload,
+          density: deckTextDensity
+        })
+      });
+      setAiTask(data.task);
+      await loadAiWorkflow();
+      setLastAiPrompt("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setAiTask({ id: "pending", status: "failed", log: err instanceof Error ? err.message : String(err) });
+    }
   }
 
   async function repairCompileIssue() {
@@ -608,8 +778,6 @@ Return complete replacement workspace files for review. Preserve the chosen deck
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {notice ? <span className="text-xs text-emerald-300">{notice}</span> : null}
-          <StatusPill status={compileJob?.status} />
           <span className="rounded-full border border-white/10 bg-white/8 px-2 py-1 text-xs text-slate-300">
             {roleLabel(currentRole)}
           </span>
@@ -636,7 +804,7 @@ Return complete replacement workspace files for review. Preserve the chosen deck
             ref={uploadRef}
             className="hidden"
             type="file"
-            accept="image/png,image/jpeg,image/gif,image/svg+xml,image/webp"
+            accept="image/png,image/jpeg,image/gif,image/webp"
             onChange={(event) => void uploadAsset(event.target.files)}
           />
           {compileJob?.shareSlug ? (
@@ -646,6 +814,16 @@ Return complete replacement workspace files for review. Preserve the chosen deck
             >
               <Share2 size={16} />
               Share
+            </a>
+          ) : null}
+          {compileJob?.status === "success" && compileJob.id !== "pending" ? (
+            <a
+              href={`${API_URL}/projects/${projectId}/compile-jobs/${compileJob.id}/download-html`}
+              download
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-white/15 bg-white/8 px-3 text-sm text-slate-100 transition hover:bg-white/12"
+            >
+              <Download size={16} />
+              Download HTML
             </a>
           ) : null}
         </div>
@@ -681,9 +859,10 @@ Return complete replacement workspace files for review. Preserve the chosen deck
       </header>
 
       <section
+        ref={workspaceMainRef}
         className="workspace-main min-h-0"
         style={{
-          gridTemplateColumns: `${leftWidth}px 6px ${centerWidth}px 6px minmax(360px, 1fr)`
+          gridTemplateColumns: workspaceGridColumns
         }}
       >
         <FilesPane
@@ -698,9 +877,9 @@ Return complete replacement workspace files for review. Preserve the chosen deck
           onOpen={openEntry}
         />
 
-        <ResizeHandle onMouseDown={() => setDragTarget("left")} />
+        {workspaceIsStacked ? null : <ResizeHandle onMouseDown={() => setDragTarget("left")} />}
 
-        <section className="min-h-0 border-r border-slate-200 bg-[var(--panel)]">
+        <section className="min-w-0 min-h-0 overflow-hidden border-r border-slate-200 bg-[var(--panel)]">
           <div className="flex h-[44px] items-center gap-1 border-b border-slate-200 bg-white/90 px-2 shadow-[inset_0_-1px_0_rgba(15,23,42,0.02)]">
             <TabButton active={activeTab === "assistant"} onClick={() => setActiveTab("assistant")}>
               <Bot size={15} />
@@ -746,6 +925,7 @@ Return complete replacement workspace files for review. Preserve the chosen deck
               instruction={aiInstruction}
               mode={aiMode}
               provider={aiProvider}
+              localProviders={localAiProviders}
               textDensity={deckTextDensity}
               canEdit={canEdit}
               lastPrompt={lastAiPrompt}
@@ -766,7 +946,7 @@ Return complete replacement workspace files for review. Preserve the chosen deck
           )}
         </section>
 
-        <ResizeHandle onMouseDown={() => setDragTarget("center")} />
+        {workspaceIsStacked ? null : <ResizeHandle onMouseDown={() => setDragTarget("center")} />}
 
         <PreviewPane
           previewSrc={previewSrc}
@@ -910,7 +1090,7 @@ function FilesPane({
   onOpen: (file: ProjectFile) => void;
 }) {
   return (
-    <aside className="min-h-0 border-r border-slate-200 bg-[#f8fafc]">
+    <aside className="min-h-0 min-w-0 overflow-hidden border-r border-slate-200 bg-[#f8fafc]">
       <PanelTitle>Files</PanelTitle>
       <form onSubmit={onCreate} className="border-b border-slate-200 bg-white/80 p-2">
         <div className="flex gap-1.5">
@@ -951,8 +1131,8 @@ function FilesPane({
             style={{ paddingLeft: `${8 + depthFor(file.path) * 14}px` }}
             title={file.path}
           >
-            {file.kind === "folder" ? <Folder size={14} /> : <FileText size={14} />}
-            <span className={file.kind === "folder" ? "font-semibold" : ""}>
+            {file.kind === "folder" ? <Folder className="shrink-0" size={14} /> : <FileText className="shrink-0" size={14} />}
+            <span className={`min-w-0 truncate ${file.kind === "folder" ? "font-semibold" : ""}`}>
               {file.name}
             </span>
           </button>
@@ -969,6 +1149,7 @@ function AssistantPane({
   instruction,
   mode,
   provider,
+  localProviders,
   textDensity,
   canEdit,
   lastPrompt,
@@ -992,6 +1173,7 @@ function AssistantPane({
   instruction: string;
   mode: AiMode;
   provider: AiProvider;
+  localProviders: LocalAiProviderConfig[];
   textDensity: DeckTextDensity;
   canEdit: boolean;
   lastPrompt: string;
@@ -1010,12 +1192,20 @@ function AssistantPane({
   onReject: () => void;
 }) {
   const hasPrompt = instruction.trim().length > 0;
-  const busy = Boolean(workflowRun) || task?.status === "running";
+  const runningArtifact = latestRunningWorkflowArtifact(artifacts);
+  const activeWorkflowRun = workflowRun ?? workflowRunFromArtifact(runningArtifact);
+  const generationRun = latestGenerationRun(artifacts);
+  const showTaskRunningBubble =
+    task?.status === "running" && !activeWorkflowRun && !isRunningDeckGenerationTask(task, generationRun);
+  const busy = Boolean(activeWorkflowRun) || task?.status === "running";
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const lastPromptAlreadySaved = Boolean(
+    lastPrompt && messages.some((message) => message.role === "user" && message.content === lastPrompt)
+  );
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-  }, [messages.length, lastPrompt, workflowRun?.label, task?.status, error]);
+  }, [messages.length, lastPrompt, activeWorkflowRun?.label, task?.status, error]);
 
   return (
     <section className="grid h-[calc(100%-44px)] grid-rows-[46px_minmax(0,1fr)_auto] bg-[#f4f7fb]">
@@ -1032,8 +1222,8 @@ function AssistantPane({
         </div>
       </div>
 
-      <div className="min-h-0 overflow-auto px-5 py-5">
-        <div className="mx-auto flex max-w-4xl flex-col gap-4">
+      <div className="min-h-0 overflow-auto px-3 py-4">
+        <div className="mx-auto flex min-w-0 max-w-4xl flex-col gap-4">
           {!messages.length && !lastPrompt && !workflowRun ? <AssistantWelcome /> : null}
 
           {messages.map((message) => (
@@ -1042,7 +1232,22 @@ function AssistantPane({
             </ChatBubble>
           ))}
 
-          {shouldShowStageAction(conversation?.stage ?? "consultation", artifacts) ? (
+          {lastPrompt && !lastPromptAlreadySaved ? (
+            <ChatBubble role="user">
+              <div className="max-w-[34rem] whitespace-pre-wrap text-sm leading-6">{lastPrompt}</div>
+            </ChatBubble>
+          ) : null}
+
+          {activeWorkflowRun ? (
+            <ChatBubble role="assistant">
+              <RunningBubble
+                title={activeWorkflowRun.label}
+                description={workflowRunDescription(activeWorkflowRun.type)}
+              />
+            </ChatBubble>
+          ) : null}
+
+          {mode === "auto" && !busy && shouldShowStageAction(conversation?.stage ?? "consultation", artifacts) ? (
             <StageActionCard
               stage={conversation?.stage ?? "consultation"}
               artifacts={artifacts}
@@ -1054,39 +1259,22 @@ function AssistantPane({
             />
           ) : null}
 
-          {lastPrompt ? (
-            <ChatBubble role="user">
-              <div className="max-w-[34rem] whitespace-pre-wrap text-sm leading-6">{lastPrompt}</div>
+          {showTaskRunningBubble ? (
+            <ChatBubble role="assistant">
+              <RunningBubble
+                title={runningTaskTitle(task)}
+                description="I am reading the current workspace and preparing a reviewable response. The result will appear here when it is ready."
+              />
             </ChatBubble>
+          ) : null}
+
+          {generationRun ? (
+            <GenerationRunCard artifact={generationRun} />
           ) : null}
 
           {error ? (
             <ChatBubble role="assistant">
               <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
-            </ChatBubble>
-          ) : null}
-
-          {workflowRun ? (
-            <ChatBubble role="assistant">
-              <RunningBubble
-                title={workflowRun.label}
-                description={
-                  workflowRun.type === "brief"
-                    ? "I am reading the chat and project context, then turning it into a clear brief."
-                    : workflowRun.type === "visual_direction"
-                      ? "I am creating distinct visual directions so the deck has a real design point of view."
-                      : "I am turning the brief and style direction into narrative structure, slide logic, and layout choices."
-                }
-              />
-            </ChatBubble>
-          ) : null}
-
-          {task?.status === "running" ? (
-            <ChatBubble role="assistant">
-              <RunningBubble
-                title="Generating workspace files"
-                description="I am reading the current project context and producing complete HTML/config files."
-              />
             </ChatBubble>
           ) : null}
 
@@ -1128,7 +1316,13 @@ function AssistantPane({
                     <details key={file.path} className="overflow-hidden rounded-md border border-slate-200 bg-slate-50" open>
                       <summary className="flex cursor-pointer items-center justify-between border-b border-slate-200 px-3 py-2 text-xs">
                         <span className="font-mono font-semibold text-slate-800">{file.path}</span>
-                        <span className="rounded bg-white px-1.5 py-0.5 text-[11px] text-slate-500">{file.action ?? "update"}</span>
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[11px] ${
+                            file.action === "delete" ? "bg-red-50 text-red-700" : "bg-white text-slate-500"
+                          }`}
+                        >
+                          {file.action ?? "update"}
+                        </span>
                       </summary>
                       <div className="max-h-64 overflow-auto p-2 font-mono text-xs">
                         {file.lines.map((line, index) => (
@@ -1166,10 +1360,12 @@ function AssistantPane({
             <div className="flex items-center justify-between gap-2 px-1 pt-1">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <ModePicker value={mode} onChange={onModeChange} />
-                <ModelPicker value={provider} onChange={onProviderChange} />
+                <ModelPicker value={provider} localProviders={localProviders} onChange={onProviderChange} />
                 <TextDensityPicker value={textDensity} onChange={onTextDensityChange} />
                 <div className="truncate text-xs text-slate-400">
-                  {mode === "auto" ? `Auto uses ${shortStageLabel(conversation?.stage ?? "consultation")}` : shortStageLabel(mode)}
+                  {mode === "auto"
+                    ? `Auto uses ${shortStageLabel(conversation?.stage ?? "consultation")}`
+                    : `Manual: ${submitActionLabel(resolveSubmitAction(mode, conversation?.stage))}`}
                 </div>
               </div>
               <button
@@ -1196,8 +1392,9 @@ function ModePicker({ value, onChange }: { value: AiMode; onChange: (value: AiMo
   const options: Array<{ value: AiMode; label: string; description: string }> = [
     { value: "auto", label: "Auto", description: "Follow current workflow" },
     { value: "consultation", label: "Clarify", description: "Refine goal and constraints" },
+    { value: "visual_direction", label: "Style", description: "Create visual directions" },
     { value: "slide_plan", label: "Plan", description: "Narrative and slide structure" },
-    { value: "generate", label: "Create", description: "Generate workspace files" }
+    { value: "generate", label: "Edit", description: "Patch existing workspace files" }
   ];
   const selected = options.find((item) => item.value === value) ?? options[0];
 
@@ -1248,11 +1445,47 @@ function ModePicker({ value, onChange }: { value: AiMode; onChange: (value: AiMo
   );
 }
 
-function ModelPicker({ value, onChange }: { value: AiProvider; onChange: (value: AiProvider) => void }) {
+function ModelPicker({
+  value,
+  localProviders,
+  onChange
+}: {
+  value: AiProvider;
+  localProviders: LocalAiProviderConfig[];
+  onChange: (value: AiProvider) => void;
+}) {
   const [open, setOpen] = useState(false);
-  const options: Array<{ value: AiProvider; label: string; description: string }> = [
-    { value: "deepseek", label: "DeepSeek", description: "Long-form generation" },
-    { value: "gemini", label: "Gemini", description: "Fast planning and drafting" }
+  const options: Array<{ value: AiProvider; label: string; description: string; source: "official" | "own" }> = [
+    { value: "deepseek", label: "DeepSeek Pro", description: "Official server configuration", source: "official" },
+    { value: "gemini", label: "Gemini Flash Lite", description: "Official server configuration", source: "official" },
+    { value: "claude-sonnet", label: "Claude Sonnet", description: "Official server configuration", source: "official" },
+    { value: "claude-opus", label: "Claude Opus", description: "Official server configuration", source: "official" },
+    ...localProviders.flatMap((provider) => {
+      if (provider.provider === "anthropic") {
+        return [
+          {
+            value: `local:${provider.id}:sonnet` as AiProvider,
+            label: `${provider.label} Sonnet`,
+            description: "Own Claude key from browser cache",
+            source: "own" as const
+          },
+          {
+            value: `local:${provider.id}:opus` as AiProvider,
+            label: `${provider.label} Opus`,
+            description: "Own Claude key from browser cache",
+            source: "own" as const
+          }
+        ];
+      }
+      return [
+        {
+          value: `local:${provider.id}` as AiProvider,
+          label: provider.label || `Own ${localProviderDisplayName(provider.provider)}`,
+          description: `Own ${localProviderDisplayName(provider.provider)} key from browser cache`,
+          source: "own" as const
+        }
+      ];
+    })
   ];
   const selected = options.find((item) => item.value === value) ?? options[0];
 
@@ -1289,7 +1522,10 @@ function ModelPicker({ value, onChange }: { value: AiProvider; onChange: (value:
               }`}
             >
               <span>
-                <span className="block text-sm font-semibold">{item.label}</span>
+                <span className="flex items-center gap-2 text-sm font-semibold">
+                  {item.label}
+                  <ModelSourceBadge label={item.source === "official" ? "official" : "own"} selected={item.value === value} />
+                </span>
                 <span className={`mt-0.5 block text-xs ${item.value === value ? "text-slate-300" : "text-slate-500"}`}>
                   {item.description}
                 </span>
@@ -1303,6 +1539,20 @@ function ModelPicker({ value, onChange }: { value: AiProvider; onChange: (value:
   );
 }
 
+function ModelSourceBadge({ label, selected }: { label: string; selected: boolean }) {
+  return (
+    <span
+      className={`rounded border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.08em] ${
+        selected
+          ? "border-amber-200 bg-amber-300 text-slate-950"
+          : "border-amber-500/60 bg-slate-950 text-amber-300"
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
 function TextDensityPicker({
   value,
   onChange
@@ -1311,16 +1561,16 @@ function TextDensityPicker({
   onChange: (value: DeckTextDensity) => void;
 }) {
   const options: Array<{ value: DeckTextDensity; label: string; title: string }> = [
-    { value: "concise", label: "简洁", title: "每页尽量少字，偏视觉表达" },
-    { value: "balanced", label: "中等", title: "内容和视觉平衡" },
-    { value: "dense", label: "复杂", title: "信息更满，适合汇报和资料型页面" }
+    { value: "concise", label: "Concise", title: "Lower text density with stronger visual storytelling" },
+    { value: "balanced", label: "Balanced", title: "Balance explanation and visual composition" },
+    { value: "dense", label: "Detailed", title: "More information for reports and reference-style slides" }
   ];
 
   return (
     <div
       className="inline-flex h-9 overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-0.5"
       aria-label="Slide text density"
-      title="控制每页文字密度"
+      title="Slide text density"
     >
       {options.map((item) => (
         <button
@@ -1355,6 +1605,315 @@ function RunningBubble({ title, description }: { title: string; description: str
       </div>
     </div>
   );
+}
+
+function GenerationRunCard({ artifact }: { artifact: AiArtifact }) {
+  const data = asRecord(artifact.contentJson);
+  const slides = Array.isArray(data.slides) ? data.slides.map(asRecord).filter(BooleanRecord) : [];
+  const status = textField(data, "status") || artifact.status;
+  const completed = slides.filter((slide) => textField(slide, "status") === "done").length;
+  const failed = slides.filter((slide) => textField(slide, "status") === "failed").length;
+  const running = slides.filter((slide) => textField(slide, "status") === "running").length;
+  const pending = slides.filter((slide) => (textField(slide, "status") || "pending") === "pending").length;
+  const progress = slides.length ? Math.round((completed / slides.length) * 100) : 0;
+  const currentSlide =
+    slides.find((slide) => textField(slide, "status") === "running") ??
+    slides.find((slide) => (textField(slide, "status") || "pending") === "pending") ??
+    slides.find((slide) => textField(slide, "status") === "failed") ??
+    slides.at(-1);
+
+  return (
+    <ChatBubble role="assistant">
+      <div className="min-w-0 w-full max-w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_18px_48px_rgba(15,23,42,0.08)]">
+        <div className="border-b border-slate-100 bg-gradient-to-br from-white via-slate-50 to-blue-50/70 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="grid h-8 w-8 place-items-center rounded-xl bg-slate-950 text-white">
+                  {status === "needs_review" ? <CheckCircle2 size={16} /> : status === "failed" ? <AlertTriangle size={16} /> : <Sparkles size={16} />}
+                </span>
+                <div>
+                  <div className="text-sm font-semibold text-slate-950">
+                    {status === "needs_review" ? "Deck generated" : status === "failed" ? "Generation needs attention" : "Generating slide files"}
+                  </div>
+                  <p className="mt-0.5 max-w-[30rem] truncate text-xs text-slate-500">
+                    Frozen plan {shortHash(textField(data, "planHash"))} · {completed}/{slides.length || 0} complete
+                  </p>
+                </div>
+              </div>
+            </div>
+            <GenerationStatusPill status={status} />
+          </div>
+
+          <div className="mt-4">
+            <div className="mb-1.5 flex items-center justify-between text-xs">
+              <span className="font-medium text-slate-600">Overall progress</span>
+              <span className="font-semibold text-slate-900">{progress}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+              <div
+                className={`h-full rounded-full transition-all ${
+                  status === "failed" ? "bg-red-500" : status === "needs_review" ? "bg-emerald-500" : "bg-blue-600"
+                }`}
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(112px,1fr))] gap-2">
+            <GenerationStat icon={<CheckCircle2 size={15} />} label="Complete" value={`${completed}/${slides.length || 0}`} tone="green" />
+            <GenerationStat icon={<Loader2 size={15} className={running ? "animate-spin" : ""} />} label="Running" value={String(running)} tone="blue" />
+            <GenerationStat icon={<Clock3 size={15} />} label="Queued" value={String(pending)} tone="slate" />
+            <GenerationStat icon={<AlertTriangle size={15} />} label="Failed" value={String(failed)} tone={failed ? "amber" : "slate"} />
+          </div>
+        </div>
+
+        <div className="space-y-3 p-4">
+          {currentSlide ? <CurrentSlidePanel slide={currentSlide} total={slides.length} /> : null}
+
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-100 px-3 py-2">
+            <div className="text-xs font-semibold text-slate-700">Slide queue</div>
+            <div className="text-xs text-slate-500">
+              {pending ? `${pending} queued` : "No queued slides"} · {failed} failed
+            </div>
+          </div>
+
+          <div className="grid gap-2">
+            {slides.map((slide, index) => (
+              <GenerationSlideRow key={textField(slide, "slideId") || `slide-${index}`} slide={slide} />
+            ))}
+            {!slides.length ? (
+              <div className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-500">
+                Waiting for slide jobs.
+              </div>
+            ) : null}
+          </div>
+
+          {failed ? (
+            <div className="flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs leading-5 text-red-800">
+              <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+              <span>{failed} slide job failed. Review the failed row, then regenerate after fixing the prompt or plan.</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </ChatBubble>
+  );
+}
+
+function CurrentSlidePanel({ slide, total }: { slide: JsonRecord; total: number }) {
+  const descriptor = generationSlideDescriptor(slide);
+  const status = textField(slide, "status") || "pending";
+
+  return (
+    <div className="rounded-2xl border border-blue-100 bg-blue-50/70 px-3 py-3">
+      <div className="flex items-start gap-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-blue-700 shadow-sm">
+          {status === "running" ? <Loader2 size={17} className="animate-spin" /> : status === "done" ? <CheckCircle2 size={17} /> : <Clock3 size={17} />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">
+              {status === "running" ? "Currently generating" : status === "pending" ? "Up next" : "Latest slide"}
+            </span>
+            <span className="text-[11px] text-blue-500">
+              Slide {descriptor.index || "?"}{total ? ` of ${total}` : ""}
+            </span>
+          </div>
+          <div className="mt-1 break-words text-sm font-semibold text-slate-950">{descriptor.title}</div>
+          <div className="mt-1 break-all font-mono text-[11px] text-blue-700">{descriptor.path}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GenerationSlideRow({ slide }: { slide: JsonRecord }) {
+  const descriptor = generationSlideDescriptor(slide);
+  const slideStatus = textField(slide, "status") || "pending";
+  const error = textField(slide, "error");
+
+  return (
+    <div
+      className={`rounded-xl border px-3 py-2.5 transition ${
+        slideStatus === "running"
+          ? "border-blue-200 bg-blue-50"
+          : slideStatus === "failed"
+            ? "border-red-200 bg-red-50"
+            : "border-slate-200 bg-slate-50"
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg text-xs font-bold ${
+            slideStatus === "done"
+              ? "bg-emerald-100 text-emerald-700"
+              : slideStatus === "running"
+                ? "bg-blue-100 text-blue-700"
+                : slideStatus === "failed"
+                  ? "bg-red-100 text-red-700"
+                  : "bg-white text-slate-500"
+          }`}
+        >
+          {slideStatus === "done" ? (
+            <CheckCircle2 size={15} />
+          ) : slideStatus === "running" ? (
+            <Loader2 size={15} className="animate-spin" />
+          ) : slideStatus === "failed" ? (
+            <AlertTriangle size={15} />
+          ) : (
+            descriptor.index || <Clock3 size={14} />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="break-words text-sm font-semibold leading-5 text-slate-900">{descriptor.title}</div>
+              <div className="mt-0.5 flex min-w-0 items-start gap-1.5 text-[11px] text-slate-500">
+                <FileCode2 size={12} className="shrink-0" />
+                <span className="break-all font-mono">{descriptor.path}</span>
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <GenerationStatusPill status={slideStatus} compact />
+            </div>
+          </div>
+          <GenerationStepBar status={slideStatus} />
+          {error ? (
+            <div className="mt-2 flex items-start gap-2 rounded-lg bg-white/70 px-2 py-1.5 text-xs leading-5 text-red-800">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+              <span className="line-clamp-2">{error}</span>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GenerationStat({
+  icon,
+  label,
+  value,
+  tone
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  tone: "green" | "blue" | "amber" | "slate";
+}) {
+  const toneClass =
+    tone === "green"
+      ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+      : tone === "blue"
+        ? "border-blue-100 bg-blue-50 text-blue-700"
+        : tone === "amber"
+          ? "border-amber-100 bg-amber-50 text-amber-700"
+          : "border-slate-100 bg-white text-slate-600";
+
+  return (
+    <div className={`rounded-xl border px-3 py-2 ${toneClass}`}>
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide opacity-80">
+        {icon}
+        {label}
+      </div>
+      <div className="mt-1 text-lg font-bold leading-none text-slate-950">{value}</div>
+    </div>
+  );
+}
+
+function GenerationStepBar({ status }: { status: string }) {
+  const steps = [
+    { label: "Context", state: status === "pending" ? "queued" : "done" },
+    {
+      label: "Generate",
+      state: status === "running" ? "active" : status === "pending" ? "queued" : status === "failed" ? "failed" : "done"
+    }
+  ];
+
+  return (
+    <div className="mt-2 grid grid-cols-[repeat(auto-fit,minmax(72px,1fr))] gap-1.5">
+      {steps.map((step) => (
+        <div
+          key={step.label}
+          className={`flex min-w-0 items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-semibold ${
+            step.state === "done"
+              ? "bg-emerald-50 text-emerald-700"
+              : step.state === "active"
+                ? "bg-blue-50 text-blue-700"
+                : step.state === "warning"
+                  ? "bg-amber-50 text-amber-700"
+                  : step.state === "failed"
+                    ? "bg-red-50 text-red-700"
+                    : "bg-white/70 text-slate-400"
+          }`}
+        >
+          {step.state === "active" ? (
+            <Loader2 size={12} className="shrink-0 animate-spin" />
+          ) : step.state === "done" ? (
+            <CheckCircle2 size={12} className="shrink-0" />
+          ) : step.state === "failed" || step.state === "warning" ? (
+            <AlertTriangle size={12} className="shrink-0" />
+          ) : (
+            <Clock3 size={12} className="shrink-0" />
+          )}
+          <span className="truncate">{step.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GenerationStatusPill({ status, compact }: { status: string; compact?: boolean }) {
+  const normalized = status || "pending";
+  const config =
+    normalized === "done" || normalized === "needs_review"
+      ? {
+          label: normalized === "needs_review" ? "ready" : "done",
+          className: "bg-emerald-50 text-emerald-700",
+          icon: <CheckCircle2 size={compact ? 12 : 13} />
+        }
+      : normalized === "failed"
+        ? {
+            label: "failed",
+            className: "bg-red-50 text-red-700",
+            icon: <AlertTriangle size={compact ? 12 : 13} />
+          }
+        : normalized === "running"
+          ? {
+              label: "running",
+              className: "bg-blue-50 text-blue-700",
+              icon: <Loader2 size={compact ? 12 : 13} className="animate-spin" />
+            }
+          : {
+              label: "pending",
+              className: "bg-slate-100 text-slate-500",
+              icon: <Clock3 size={compact ? 12 : 13} />
+            };
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${config.className}`}
+    >
+      {config.icon}
+      {compact ? null : config.label}
+    </span>
+  );
+}
+
+function generationSlideDescriptor(slide: JsonRecord): { path: string; title: string; index: string } {
+  const path = textField(slide, "path") || textField(slide, "slideId") || "slide";
+  const slideId = textField(slide, "slideId");
+  const index = textField(slide, "index") || slideId.replace(/^s0*/i, "");
+  const fileName = path.split(/[\\/]/).at(-1) ?? path;
+  const withoutExtension = fileName.replace(/\.[^.]+$/, "");
+  const title = withoutExtension.replace(/^\d+[-_]/, "").replace(/[-_]+/g, " ").trim() || slideId || path;
+  return { path, title, index };
+}
+
+function shortHash(value: string): string {
+  if (!value) return "pending";
+  return value.length > 12 ? `${value.slice(0, 8)}...${value.slice(-4)}` : value;
 }
 
 function AssistantWelcome() {
@@ -1555,6 +2114,13 @@ function BriefArtifact({
   const mustInclude = listField(data, "mustInclude");
   const unknowns = meaningfulList(listField(data, "unknowns"));
   const questions = meaningfulList(listField(data, "clarifyingQuestions"));
+  const pyramidPrinciple = asRecord(data.pyramidPrinciple);
+  const scqa = asRecord(data.scqa);
+  const meceMap = asRecord(data.meceMap);
+  const meceBuckets = recordList(meceMap.buckets);
+  const actionTitleCandidates = listField(data, "actionTitleCandidates");
+  const soWhatTests = listField(data, "soWhatTests");
+  const questionPlan = recordList(data.questionPlan);
   const readyForPlan = unknowns.length === 0 && questions.length === 0;
 
   return (
@@ -1581,6 +2147,60 @@ function BriefArtifact({
       ) : null}
 
       <ArtifactList title="Must include" items={mustInclude} />
+
+      {Object.keys(pyramidPrinciple).length ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Pyramid principle</div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <MiniFact label="Top-line answer" value={textField(pyramidPrinciple, "topLineAnswer")} />
+            <ArtifactList title="Supporting pillars" items={listField(pyramidPrinciple, "supportingPillars")} compact />
+            <ArtifactList title="Proof needed" items={listField(pyramidPrinciple, "proofNeeded")} compact tone="amber" />
+          </div>
+        </div>
+      ) : null}
+
+      {Object.keys(scqa).length ? (
+        <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">SCQA frame</div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <MiniFact label="Situation" value={textField(scqa, "situation")} />
+            <MiniFact label="Complication" value={textField(scqa, "complication")} />
+            <MiniFact label="Question" value={textField(scqa, "question")} />
+            <MiniFact label="Answer" value={textField(scqa, "answer")} />
+          </div>
+        </div>
+      ) : null}
+
+      {meceBuckets.length || listField(meceMap, "overlapRisks").length ? (
+        <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">MECE map</div>
+          <ArtifactList
+            title="Buckets"
+            items={meceBuckets.map((bucket) => {
+              const label = textField(bucket, "label");
+              const included = listField(bucket, "included").join(", ");
+              const why = textField(bucket, "whyItMatters");
+              return [label, included, why].filter(Boolean).join(" — ");
+            })}
+            compact
+          />
+          <ArtifactList title="Overlap risks" items={listField(meceMap, "overlapRisks")} compact tone="amber" />
+        </div>
+      ) : null}
+
+      <ArtifactList title="Action title candidates" items={actionTitleCandidates} tone="blue" />
+      <ArtifactList title="So What tests" items={soWhatTests} />
+      <ArtifactList
+        title="Question rationale"
+        items={questionPlan.map((item) => {
+          const question = textField(item, "question");
+          const reason = textField(item, "reason");
+          const blocksStage = textField(item, "blocksStage");
+          return [question, reason, blocksStage ? `blocks: ${blocksStage}` : ""].filter(Boolean).join(" — ");
+        })}
+        tone="amber"
+      />
+
       <ArtifactList title="Still unclear" items={unknowns} tone="amber" />
       <ArtifactList title="Questions for you" items={questions} tone="blue" />
 
@@ -1745,9 +2365,24 @@ function PlanArtifact({
   onGenerateHtml: () => void;
 }) {
   const data = asRecord(artifact.contentJson);
-  const slides = Array.isArray(data.slides) ? data.slides.map(asRecord).filter(BooleanRecord) : [];
-  const chosenDirection = asRecord(data.chosenDirection);
-  const designSystem = asRecord(data.designSystem);
+  const sections = Array.isArray(data.sections) ? data.sections.map(asRecord).filter(BooleanRecord) : [];
+  const slides =
+    sections.length > 0
+      ? sections.flatMap((section) => (Array.isArray(section.slides) ? section.slides.map(asRecord).filter(BooleanRecord) : []))
+      : Array.isArray(data.slides)
+        ? data.slides.map(asRecord).filter(BooleanRecord)
+        : [];
+  const globalStyle = asRecord(data.globalStyle);
+  const chosenDirection = asRecord(globalStyle.chosenDirection ?? data.chosenDirection);
+  const designSystem = Object.keys(globalStyle).length ? globalStyle : asRecord(data.designSystem);
+  const narrativeArc = asRecord(data.narrativeArc);
+  const evidencePack = asRecord(data.evidencePack);
+  const evidenceItems = [
+    ...recordList(evidencePack.knownFacts),
+    ...recordList(evidencePack.userClaims),
+    ...recordList(evidencePack.assumptions)
+  ];
+  const missingEvidence = recordList(evidencePack.missingEvidence);
 
   return (
     <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
@@ -1763,11 +2398,48 @@ function PlanArtifact({
         </span>
       </div>
 
-      {textField(data, "narrativeArc") ? (
+      {Object.keys(narrativeArc).length ? (
         <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">Narrative arc</div>
-          <p className="mt-1 text-sm leading-6 text-slate-800">{textField(data, "narrativeArc")}</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <MiniFact label="Starting belief" value={textField(narrativeArc, "startingBelief")} />
+            <MiniFact label="Tension" value={textField(narrativeArc, "tension")} />
+            <MiniFact label="Turning point" value={textField(narrativeArc, "turningPoint")} />
+            <MiniFact label="Resolution" value={textField(narrativeArc, "resolution")} />
+            <MiniFact label="Decision ask" value={textField(narrativeArc, "decisionAsk")} />
+            <MiniFact label="Story beats" value={listField(narrativeArc, "storylineBeats").join(" → ")} />
+          </div>
         </div>
+      ) : null}
+
+      {evidenceItems.length || missingEvidence.length ? (
+        <details className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2" open>
+          <summary className="cursor-pointer text-xs font-semibold text-slate-700">
+            Evidence pack · {evidenceItems.length} evidence item{evidenceItems.length === 1 ? "" : "s"} · {missingEvidence.length} missing
+          </summary>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <ArtifactList
+              title="Known facts, claims, assumptions"
+              items={evidenceItems.map((item) => {
+                const id = textField(item, "id");
+                const statement = textField(item, "statement");
+                const confidence = textField(item, "confidence");
+                return [id, statement, confidence ? `(${confidence})` : ""].filter(Boolean).join(" ");
+              })}
+              compact
+            />
+            <ArtifactList
+              title="Missing evidence"
+              items={missingEvidence.map((item) => {
+                const label = textField(item, "label");
+                const purpose = textField(item, "purpose");
+                return [label, purpose].filter(Boolean).join(" — ");
+              })}
+              compact
+              tone="amber"
+            />
+          </div>
+        </details>
       ) : null}
 
       {textField(chosenDirection, "name") || textField(data, "designDirection") ? (
@@ -1827,13 +2499,14 @@ function SlidePlanItem({ slide, fallbackIndex }: { slide: JsonRecord; fallbackIn
   const index = textField(slide, "index") || String(fallbackIndex);
   const actionTitle = textField(slide, "actionTitle") || textField(slide, "title") || `Slide ${index}`;
   const layout = textField(slide, "layout");
-  const pattern = textField(slide, "visualPattern");
-  const message = textField(slide, "message");
-  const visualRole = textField(slide, "visualRole");
+  const pattern = textField(slide, "recommendedVisual") || textField(slide, "visualPattern");
+  const message = textField(slide, "coreMessage") || textField(slide, "message");
+  const visualRole = textField(slide, "role") || textField(slide, "visualRole");
   const density = textField(slide, "density");
-  const contentBlocks = Array.isArray(slide.contentBlocks)
-    ? slide.contentBlocks.map(readableValue).filter(Boolean)
-    : [];
+  const claims = recordList(slide.claims);
+  const evidenceSlots = recordList(slide.evidenceSlots);
+  const contentBlocks = recordList(slide.contentBlocks);
+  const dataNeeds = recordList(slide.dataNeeds);
   const visualTreatment = asRecord(slide.visualTreatment);
   const designNotes = asRecord(slide.designNotes);
 
@@ -1848,12 +2521,51 @@ function SlidePlanItem({ slide, fallbackIndex }: { slide: JsonRecord; fallbackIn
           <div className="mt-1 flex flex-wrap gap-1.5">
             {layout ? <Tag>{layout}</Tag> : null}
             {pattern ? <Tag>{pattern}</Tag> : null}
+            {textField(slide, "analysisOperator") ? <Tag>{textField(slide, "analysisOperator")}</Tag> : null}
             {visualRole ? <Tag>{visualRole}</Tag> : null}
             {density ? <Tag>{density} density</Tag> : null}
           </div>
           {message ? <p className="mt-2 text-sm leading-6 text-slate-600">{message}</p> : null}
-          <ArtifactList title="Supporting points" items={listField(slide, "supportingPoints")} compact />
-          <ArtifactList title="Content blocks" items={contentBlocks} compact />
+          <ArtifactList title="Narrative job" items={[textField(slide, "narrativeFunction"), textField(slide, "tension"), textField(slide, "implication")].filter(Boolean)} compact tone="blue" />
+          <ArtifactList
+            title="Claims"
+            items={claims.map((claim) =>
+              [textField(claim, "claim"), textField(claim, "supportType") ? `(${textField(claim, "supportType")})` : ""]
+                .filter(Boolean)
+                .join(" ")
+            )}
+            compact
+          />
+          <ArtifactList
+            title="Evidence slots"
+            items={evidenceSlots.map((slot) => {
+              const purpose = textField(slot, "purpose");
+              const ids = listField(slot, "evidenceIds").join(", ");
+              return [purpose, ids ? `→ ${ids}` : ""].filter(Boolean).join(" ");
+            })}
+            compact
+            tone="amber"
+          />
+          <ArtifactList
+            title="Content blocks"
+            items={contentBlocks.map((block) =>
+              [textField(block, "role"), textField(block, "contentIntent"), listField(block, "mustInclude").join(", ")]
+                .filter(Boolean)
+                .join(" — ")
+            )}
+            compact
+          />
+          <ArtifactList
+            title="Data needs"
+            items={dataNeeds.map((need) =>
+              [textField(need, "label"), textField(need, "preferredFormat"), textField(need, "purpose")]
+                .filter(Boolean)
+                .join(" — ")
+            )}
+            compact
+            tone="amber"
+          />
+          <ArtifactList title="Transitions" items={[textField(slide, "transitionFromPrevious"), textField(slide, "transitionToNext")].filter(Boolean)} compact tone="blue" />
           <ArtifactList
             title="Visual treatment"
             items={[
@@ -1938,9 +2650,9 @@ function Tag({ children }: { children: React.ReactNode }) {
 
 function ChatBubble({ role, children }: { role: "assistant" | "user"; children: React.ReactNode }) {
   return (
-    <div className={`flex ${role === "user" ? "justify-end" : "justify-start"}`}>
+    <div className={`flex min-w-0 ${role === "user" ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-full rounded-xl px-4 py-3 shadow-sm ${
+        className={`min-w-0 max-w-full rounded-xl px-4 py-3 shadow-sm ${
           role === "user"
             ? "bg-slate-950 text-white shadow-[0_14px_32px_rgba(15,23,42,0.18)]"
             : "border border-slate-200 bg-white text-slate-900 shadow-[0_10px_30px_rgba(15,23,42,0.06)]"
@@ -1955,14 +2667,25 @@ function ChatBubble({ role, children }: { role: "assistant" | "user"; children: 
 function MessageContent({ message }: { message: AiMessage }) {
   const rawStatus = typeof message.metadata?.status === "string" ? message.metadata.status : "";
   const status = rawStatus === "draft" || rawStatus === "approved" ? "" : rawStatus;
+
+  // Extract token usage
+  const usage = message.metadata?.usage as { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
+
   return (
     <div className="max-w-[34rem]">
       <div className="whitespace-pre-wrap text-sm leading-6">{message.content}</div>
-      {status ? (
-        <div className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-500">
-          {status.replace("_", " ")}
-        </div>
-      ) : null}
+      <div className="mt-2 flex flex-wrap gap-2">
+        {status ? (
+          <div className="inline-flex rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-500">
+            {status.replace("_", " ")}
+          </div>
+        ) : null}
+        {usage && (usage.inputTokens || usage.outputTokens) ? (
+          <div className="inline-flex rounded-full bg-blue-50 px-2 py-1 text-[11px] text-blue-600 border border-blue-100 font-mono">
+            {usage.totalTokens || (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)} tk ({usage.inputTokens} in, {usage.outputTokens} out)
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -1995,13 +2718,13 @@ function EditorPane({
   onDelete: () => void;
 }) {
   return (
-    <section className="grid h-[calc(100%-44px)] grid-rows-[40px_minmax(0,1fr)] bg-white">
-      <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/70 px-3">
-        <div className="min-w-0 truncate text-sm font-semibold text-slate-800">
+    <section className="grid h-[calc(100%-44px)] min-w-0 grid-rows-[40px_minmax(0,1fr)] overflow-hidden bg-white">
+      <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/70 px-3">
+        <div className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800">
           {file.path}
           {dirty ? <span className="ml-2 text-xs text-blue-700">unsaved</span> : null}
         </div>
-        <div className="flex gap-1">
+        <div className="flex shrink-0 gap-1">
           <button onClick={onSave} disabled={!canEdit || !dirty || file.kind !== "file" || file.isBinary} className="rounded-md border border-slate-300 bg-white px-2 py-0.5 text-xs transition hover:bg-slate-50 disabled:opacity-50">
             Save
           </button>
@@ -2014,21 +2737,25 @@ function EditorPane({
         </div>
       </div>
       {file.kind === "file" && !file.isBinary ? (
-        <MonacoEditor
-          height="100%"
-          language={languageFor(file.path)}
-          value={content}
-          theme="vs-light"
-          onChange={(value) => onContentChange(value ?? "")}
-          options={{
-            minimap: { enabled: false },
-            fontSize: 14,
-            wordWrap: "on",
-            tabSize: 2,
-            scrollBeyondLastLine: false,
-            readOnly: !canEdit
-          }}
-        />
+        <div className="min-h-0 min-w-0 overflow-hidden">
+          <MonacoEditor
+            height="100%"
+            width="100%"
+            language={languageFor(file.path)}
+            value={content}
+            theme="vs-light"
+            onChange={(value) => onContentChange(value ?? "")}
+            options={{
+              automaticLayout: true,
+              minimap: { enabled: false },
+              fontSize: 14,
+              wordWrap: "on",
+              tabSize: 2,
+              scrollBeyondLastLine: false,
+              readOnly: !canEdit
+            }}
+          />
+        </div>
       ) : (
         <div className="grid place-items-center p-6 text-center text-sm text-slate-500">
           {file.isBinary ? "Binary asset selected." : "Folder selected. Rename or delete it from this panel."}
@@ -2071,7 +2798,7 @@ function PreviewPane({
           : "Waiting";
 
   return (
-    <section className="min-h-0 bg-[#e5ebf3]">
+    <section className="min-w-0 min-h-0 overflow-hidden bg-[#e5ebf3]">
       <PanelTitle>
         <div className="flex w-full items-center justify-between gap-3">
           <span>Visualization</span>
@@ -2090,13 +2817,13 @@ function PreviewPane({
           </span>
         </div>
       </PanelTitle>
-      <div className="m-3 h-[calc(100%-64px)] overflow-hidden rounded-2xl border border-slate-300/80 bg-[#d9e1ec] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_18px_42px_rgba(15,23,42,0.10)]">
-        <div className="grid h-full place-items-center overflow-hidden rounded-xl border border-white/70 bg-[linear-gradient(135deg,#f8fafc_0%,#e9eef6_48%,#dfe7f1_100%)] p-5">
+      <div className="m-3 h-[calc(100%-64px)] min-w-0 overflow-hidden rounded-2xl border border-slate-300/80 bg-[#d9e1ec] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_18px_42px_rgba(15,23,42,0.10)]">
+        <div className="grid h-full min-w-0 place-items-center overflow-hidden rounded-xl border border-white/70 bg-[linear-gradient(135deg,#f8fafc_0%,#e9eef6_48%,#dfe7f1_100%)] p-5">
         {previewSrc ? (
           <iframe
             key={previewSrc}
             src={previewSrc}
-            className="h-full w-full rounded-lg border-0 bg-white shadow-[0_18px_48px_rgba(15,23,42,0.18)]"
+            className="h-full w-full min-w-0 max-w-full rounded-lg border-0 bg-white shadow-[0_18px_48px_rgba(15,23,42,0.18)]"
             sandbox="allow-scripts"
             title="Compiled preview"
           />
@@ -2220,7 +2947,7 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className={`inline-flex h-8 max-w-[360px] items-center gap-2 rounded-lg px-2 text-sm transition ${
+      className={`inline-flex h-8 min-w-0 max-w-[360px] items-center gap-2 rounded-lg px-2 text-sm transition ${
         active ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200" : "text-slate-600 hover:bg-slate-100"
       }`}
     >
@@ -2324,21 +3051,13 @@ function languageFor(filePath: string): string {
 
 function defaultContentFor(filePath: string): string {
   if (filePath.endsWith(".html")) {
-    return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>New Slide Deck</title>
-</head>
-<body>
-  <main class="deck">
-    <section class="slide active">
-      <h1>New Slide Deck</h1>
-    </section>
-  </main>
-</body>
-</html>
+    return `<section class="slide" data-slide-id="new-slide" data-motion="progressive-reveal" data-visual="executive-summary">
+  <div class="slide-content">
+    <div class="eyebrow">New slide</div>
+    <h1>New slide advances the deck argument</h1>
+    <p>Replace this with one clear message, evidence, and an intentional visual structure.</p>
+  </div>
+</section>
 `;
   }
   if (filePath.endsWith(".md")) {
@@ -2357,10 +3076,95 @@ function artifactTypeForStage(stage: WorkflowStage): ArtifactType | null {
   return null;
 }
 
+function resolveSubmitAction(mode: AiMode, stage?: WorkflowStage): SubmitAction {
+  const target = mode === "auto" ? stage ?? "consultation" : mode;
+  const artifactType = artifactTypeForStage(target);
+  return artifactType ? { kind: "artifact", type: artifactType } : { kind: "edit" };
+}
+
+function submitActionLabel(action: SubmitAction): string {
+  if (action.kind === "edit") return "Edit workspace";
+  return artifactLabel(action.type);
+}
+
+function requireAiProviderPayload(
+  value: AiProvider,
+  providers: LocalAiProviderConfig[]
+): AiProviderRequestPayload {
+  const payload = aiProviderRequestPayload(value, providers);
+  if (!payload) throw new Error("Selected own AI model is no longer available. Reopen Settings and add it again.");
+  return payload;
+}
+
 function latestArtifactForType(artifacts: AiArtifact[], type: ArtifactType, status?: string): AiArtifact | null {
   return (
     artifacts.find((artifact) => artifact.type === type && (!status || artifact.status === status)) ?? null
   );
+}
+
+function latestGenerationRun(artifacts: AiArtifact[]): AiArtifact | null {
+  return artifacts.find((artifact) => artifact.type === "deck_generation_run") ?? null;
+}
+
+function latestRunningWorkflowArtifact(artifacts: AiArtifact[]): AiArtifact | null {
+  return (
+    artifacts.find(
+      (artifact) =>
+        artifact.status === "running" &&
+        (artifact.type === "brief" || artifact.type === "visual_direction" || artifact.type === "slide_plan")
+    ) ?? null
+  );
+}
+
+function workflowRunFromArtifact(artifact: AiArtifact | null): WorkflowRun | null {
+  if (!artifact) return null;
+  if (artifact.type !== "brief" && artifact.type !== "visual_direction" && artifact.type !== "slide_plan") return null;
+  return { type: artifact.type, label: workflowRunLabel(artifact.type) };
+}
+
+function workflowRunDescription(type: ArtifactType): string {
+  if (type === "brief") {
+    return "I am reading the chat and project context, then turning it into a clear brief.";
+  }
+  if (type === "visual_direction") {
+    return "I am creating distinct visual directions so the deck has a real design point of view.";
+  }
+  return "I am turning the brief and style direction into narrative structure, slide logic, and layout choices.";
+}
+
+function isRunningDeckGenerationTask(task: AiTask | null, generationRun: AiArtifact | null): boolean {
+  if (!task || task.status !== "running" || !generationRun) return false;
+  const content = asRecord(generationRun.contentJson);
+  const runStatus = textField(content, "status") || generationRun.status;
+  if (runStatus !== "running") return false;
+  const runTaskId = textField(content, "taskId");
+  return !runTaskId || task.id === "pending" || task.id === runTaskId;
+}
+
+function runningTaskTitle(task: AiTask | null): string {
+  const prompt = (task?.prompt ?? "").toLowerCase();
+  if (prompt.includes("repair")) return "Repairing the deck";
+  if (prompt.includes("generate") && prompt.includes("deck")) return "Generating workspace files";
+  return "Working on your request";
+}
+
+function selectRestorableTask(tasks: AiTask[], artifacts: AiArtifact[] = []): AiTask | null {
+  const running = tasks.find((task) => task.status === "running");
+  if (running) return running;
+
+  const needsReview = tasks.find((task) => task.status === "needs_review");
+  if (needsReview) return needsReview;
+
+  const latestSuccessfulArtifact = artifacts.find(
+    (artifact) =>
+      artifact.status === "draft" ||
+      artifact.status === "approved" ||
+      artifact.status === "needs_review" ||
+      textField(asRecord(artifact.contentJson), "status") === "needs_review"
+  );
+  if (latestSuccessfulArtifact) return null;
+
+  return tasks.find((task) => task.status === "failed") ?? null;
 }
 
 function shouldShowStageAction(stage: WorkflowStage, artifacts: AiArtifact[]): boolean {
@@ -2425,6 +3229,10 @@ function listField(record: JsonRecord, key: string): string[] {
   if (Array.isArray(value)) return value.map(readableValue).filter(Boolean);
   const text = readableValue(value);
   return text ? [text] : [];
+}
+
+function recordList(value: unknown): JsonRecord[] {
+  return Array.isArray(value) ? value.map(asRecord).filter(BooleanRecord) : [];
 }
 
 function readableValue(value: unknown): string {
