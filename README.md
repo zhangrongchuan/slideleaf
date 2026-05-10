@@ -1,47 +1,58 @@
+<p align="center">
+  <img src="apps/web/public/logo.png" alt="SlideLeaf logo" width="96" />
+</p>
+
+<p align="center">
+  <a href="./README.md"><strong>English</strong></a>
+  ·
+  <a href="./README.zh-CN.md">简体中文</a>
+</p>
+
 # SlideLeaf
 
-SlideLeaf is an AI-native HTML presentation workspace for teams that want investor, board, strategy, product, and technical decks to be generated as real source files instead of opaque screenshots or locked design exports.
+AI-native HTML slide workspaces for people who want serious decks as editable source files.
 
-The core idea is simple: a deck is a small web project. SlideLeaf stores editable files, uses AI to plan the narrative, generates modular slide fragments, compiles them into a portable static HTML presentation, and keeps every AI change behind a reviewable patch.
+[![License](https://img.shields.io/badge/license-Non--Commercial-blue)](./LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6)](https://www.typescriptlang.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-15-black)](https://nextjs.org/)
+[![NestJS](https://img.shields.io/badge/NestJS-10-e0234e)](https://nestjs.com/)
+
+SlideLeaf turns deck creation into a workflow instead of a one-shot prompt. Describe what you need, let AI ask the missing questions, choose a visual direction, approve a DeckPlan, then generate modular HTML slide files that can be reviewed, edited, compiled, and shared.
+
+It is built for product demos, technical talks, open-source project showcases, startup pitch drafts, teaching materials, and other presentations where teams want editable source files instead of locked slide exports.
 
 ## Why SlideLeaf
 
-Most AI presentation tools optimize for fast first drafts. SlideLeaf is built for decks where the final result needs to be credible in front of investors, CEOs, boards, customers, or technical decision makers.
+- **Ask-first generation**: the AI clarifies audience, goal, language, tone, constraints, missing facts, and narrative intent before generating files.
+- **Design before output**: visual directions and a DeckPlan are created before slide files are generated.
+- **HTML-first slides**: slides are source files, not screenshots or locked exports.
+- **Reviewable AI patches**: AI changes stay in review until a user applies or rejects them.
+- **Open and self-hostable**: run the full stack locally or deploy it on your own infrastructure.
+- **Bring your own API key**: configure your own DeepSeek, Gemini, or Claude key in the browser; own keys do not consume SlideLeaf credits.
+- **Collaborative workspaces**: invite teammates to view or edit the same project.
+- **Portable output**: compile decks into static HTML with local theme and runtime assets.
 
-- HTML-first output: slides are editable source files, not sealed images.
-- DeckPlan-first generation: structure is planned before files are generated.
-- Modular slides: each page is a standalone fragment listed in `project.config.json`.
-- Local playbook guidance: AI uses SlideLeaf's deck archetypes, analysis operators, visual patterns, style directions, motion presets, QA rules, and examples.
-- Template-style intelligence: the playbook includes adapted style metadata from 32 MIT-licensed beautiful-html-templates directions, used for tone-first visual direction selection.
-- Review before apply: AI proposes workspace file patches; users decide what lands.
-- Portable rendering: compiled decks become static HTML with local theme and runtime files.
-- Provider flexible: official DeepSeek/Gemini routing plus browser-local own keys for DeepSeek, Gemini, and Claude.
-
-## Product Workflow
-
-SlideLeaf treats high-quality deck creation as a production pipeline:
+## How It Works
 
 ```text
-User brief
--> Clarifying questions when information is missing
--> AI Playbook retrieval
--> Visual directions
--> DeckPlan / Ghost Deck
--> Freeze DeckPlan
--> Generate modular workspace files
--> Review generated patch
--> Apply
--> Compile and share
+Describe the deck
+  -> AI asks clarifying questions
+  -> AI proposes visual directions
+  -> AI creates a DeckPlan
+  -> You approve the plan
+  -> AI generates modular slide files
+  -> You review the patch
+  -> Compile and share static HTML
 ```
 
-The generated project shape is intentionally file-based:
+Generated decks are ordinary project files:
 
 ```text
 project.config.json
 slides/
   01-title.html
-  02-market-context.html
-  03-segmentation.html
+  02-problem.html
+  03-workflow.html
 themes/
   deck.css
 runtime/
@@ -49,7 +60,7 @@ runtime/
 assets/
 ```
 
-Each slide file should be a single fragment:
+Each generated slide is a fragment:
 
 ```html
 <section class="slide" data-slide-id="s01" data-motion="progressive-reveal">
@@ -57,121 +68,68 @@ Each slide file should be a single fragment:
 </section>
 ```
 
-The renderer reads `project.config.json.slides` as the source of truth, assembles the slide fragments in order, injects the shared theme, adds stable navigation/runtime behavior, and produces a static `index.html`. Legacy standalone `slides/deck.html` projects are still supported.
+`project.config.json` is the compile index. The renderer reads the listed slide files, injects the shared theme/runtime, and produces a portable HTML deck.
 
-## AI Workspace Modes
+## Core Concepts
 
-The AI panel has two kinds of controls: workflow artifact generation and file patching. This keeps early planning separate from later deck editing.
+### DeckPlan
 
-| Mode | What it does | Use it when |
-| --- | --- | --- |
-| `Auto` | Follows the current workflow stage stored on the conversation. It may create a brief, visual directions, a DeckPlan, or move toward deck generation depending on where the project is in the pipeline. | You want SlideLeaf to continue the normal staged workflow. |
-| `Clarify` | Generates or updates the creative brief. It focuses on audience, purpose, language, tone, slide count, must-have content, unknowns, and clarification questions. | The deck request is still ambiguous, or you want the AI to re-understand the project before planning. |
-| `Style` | Generates visual directions from the brief and relevant playbook entries. It explores palette, typography, layout personality, motion language, and sample direction previews. | You want to choose or revise the visual system before planning or regenerating slides. |
-| `Plan` | Generates the DeckPlan / Ghost Deck. It defines storyline, sections, slide roles, action titles, evidence needs, analysis operators, recommended visuals, dependencies, and do-not-cover constraints. | You want to change the deck narrative, slide order, argument structure, or content strategy. |
-| `Edit` | Reads the current workspace files and returns a reviewable patch. It can update `slides/*.html`, `themes/deck.css`, `runtime/deck.js`, `project.config.json`, or delete stale files when appropriate. | You want to tune the generated deck, fix layout issues, adjust wording, change styling, or repair compile problems without restarting the full workflow. |
+The DeckPlan is the frozen blueprint for a deck. It contains the brief, main thesis, sections, slide roles, action titles, evidence needs, visual recommendations, dependencies, and `doNotCover` constraints. Slide generation follows this plan instead of improvising the whole deck in one prompt.
 
-The `Generate deck` action is separate from `Edit`. It uses the approved DeckPlan as the source of truth and creates the modular workspace files for review. After files exist, most refinements should use `Edit` unless the brief, style direction, or DeckPlan itself needs to change.
+### AI Playbook
 
-## AI Architecture
+SlideLeaf ships with a local Markdown playbook in `packages/ai-playbook`. It includes deck archetypes, analysis operators, visual patterns, style directions, motion presets, QA rules, and examples. The backend retrieves relevant entries and injects only the needed context into each AI request.
 
-SlideLeaf does not depend on provider-native "skills". It implements its own provider-agnostic playbook layer in `packages/ai-playbook`.
+### Review Patches
 
-The playbook content is stored as Markdown and compiled into a structured index:
-
-```text
-packages/ai-playbook/content/
-  deck-archetypes/
-  analysis-operators/
-  visual-patterns/
-  motion-presets/
-  style-directions/
-  qa-rules/
-  examples/
-```
-
-During generation, the API selects relevant playbook entries from the current brief, slide role, deck archetype, analysis operator, visual pattern, and style direction. Only the selected entries are injected into the model prompt, which keeps context stable across multi-turn workflows.
-
-The main deck artifact is a rich DeckPlan. It captures the storyline, evidence needs, audience, main thesis, section structure, slide roles, claims, transitions, content blocks, visual recommendations, dependencies, and `doNotCover` constraints. Once approved, the plan is frozen so later generation does not drift.
-
-For visual direction work, SlideLeaf can retrieve template-style entries by mood, tone, occasion, formality, density, audience, and Chinese or English brief terms. These entries guide palette, typography, layout grammar, and style QA, while SlideLeaf still outputs its own fragment-based file structure and renderer-owned navigation.
-
-## Renderer Rules
-
-The renderer is deliberately strict so generated decks remain portable and easy to debug.
-
-- `project.config.json.slides` controls the compile order.
-- Multi-slide mode expects one complete slide root per file.
-- Shared CSS belongs in `themes/deck.css`.
-- Slide navigation, active state, counters, progress, keyboard controls, and basic reveal behavior are owned by the renderer so every compiled deck can move through all configured slides.
-- `runtime/deck.js` is optional extension space for non-navigation behavior; it should not recreate slide navigation or duplicate progress UI.
-- Per-slide `<script>` and `<style>` output is not allowed.
-- Remote runtime dependencies are avoided for portable sharing.
-- Markdown slides and `slides/deck.html` are kept for compatibility.
+AI output is not applied directly. The system creates a workspace patch that can be reviewed, applied, or rejected. This makes AI editing closer to a code review workflow than a blind overwrite.
 
 ## Tech Stack
 
-- Monorepo: pnpm workspaces, TypeScript
-- Web app: Next.js 15, React 19, Tailwind CSS, Monaco editor, lucide-react
-- API: NestJS, Prisma, PostgreSQL, JWT/cookie auth
-- Worker: BullMQ, Redis, renderer jobs
-- Storage: S3-compatible object storage, MinIO for local development
-- Renderer: custom TypeScript renderer in `packages/renderer`
-- AI playbook: Markdown content plus structured TypeScript index in `packages/ai-playbook`
-- AI providers: Anthropic Claude Messages API plus OpenAI-compatible Gemini, DeepSeek, and OpenAI routes
+- **Monorepo**: pnpm workspaces, TypeScript
+- **Web**: Next.js 15, React 19, Tailwind CSS, Monaco editor
+- **API**: NestJS, Prisma, PostgreSQL, cookie/JWT auth
+- **Worker**: BullMQ, Redis
+- **Storage**: S3-compatible storage, MinIO for local development
+- **Renderer**: custom static HTML deck compiler
+- **AI**: DeepSeek, Gemini, Anthropic Claude, OpenAI-compatible routes
 
 ## Repository Layout
 
 ```text
 apps/
-  web/       Next.js workspace UI
+  web/       Next.js app and workspace UI
   api/       NestJS API, auth, projects, AI orchestration
-  worker/    BullMQ worker for compile/render jobs
+  worker/    compile/render worker
 packages/
-  ai-playbook/   Local deck generation knowledge base
-  renderer/      Static HTML deck compiler
-  shared/        Shared types
+  ai-playbook/   local AI generation knowledge base
+  renderer/      static HTML deck compiler
+  shared/        shared types
   storage/       S3-compatible storage adapter
-  workspace/     Workspace materialization utilities
+  workspace/     workspace utilities
 prisma/
   schema.prisma
 ```
 
-## Local Development
+## Quick Start
 
-Enable pnpm through Corepack:
+Requirements:
+
+- Node.js 22+
+- pnpm via Corepack
+- Docker, for PostgreSQL, Redis, and MinIO
 
 ```bash
 corepack enable
 corepack prepare pnpm@9.15.4 --activate
-```
-
-Create an environment file:
-
-```bash
-cp .env.example .env
-```
-
-Install dependencies:
-
-```bash
 pnpm install
-```
-
-Start backing services:
-
-```bash
+cp .env.example .env
 docker compose up postgres redis minio
-```
-
-Push the Prisma schema and generate the client:
-
-```bash
 pnpm prisma:push
 pnpm prisma:generate
 ```
 
-Start the apps in separate terminals:
+Start the services in separate terminals:
 
 ```bash
 pnpm --filter @slideleaf/api dev
@@ -179,126 +137,62 @@ pnpm --filter @slideleaf/worker dev
 pnpm --filter @slideleaf/web dev
 ```
 
-The web app runs at `http://localhost:3000`, and the API runs at `http://localhost:4000`.
+Open:
 
-You can also start the local Docker stack:
+```text
+http://localhost:3000
+```
+
+You can also run the local Docker stack:
 
 ```bash
 docker compose up --build
 ```
 
-## AI Provider Setup
+## AI Providers
 
-Set one provider in `.env`:
-
-```env
-AI_PROVIDER="anthropic"
-ANTHROPIC_API_KEY="your-anthropic-api-key"
-ANTHROPIC_MODEL="claude-sonnet-4-6"
-```
-
-Gemini, DeepSeek, and OpenAI-compatible routes are also supported:
-
-```env
-AI_PROVIDER="gemini"
-GEMINI_API_KEY="your-gemini-api-key"
-GEMINI_MODEL="gemini-3.1-flash-lite"
-```
+Official server models are configured through API environment variables:
 
 ```env
 AI_PROVIDER="deepseek"
-DEEPSEEK_API_KEY="your-deepseek-api-key"
+DEEPSEEK_API_KEY="..."
 DEEPSEEK_MODEL="deepseek-v4-pro"
+
+GEMINI_API_KEY="..."
+GEMINI_MODEL="gemini-3.1-flash-lite"
+
+ANTHROPIC_API_KEY="..."
+ANTHROPIC_SONNET_MODEL="claude-sonnet-4-6"
+ANTHROPIC_OPUS_MODEL="claude-opus-4-7"
 ```
 
-The UI currently exposes DeepSeek V4 Pro and Gemini 3.1 Flash Lite as official server models. Claude Sonnet 4.6 and Claude Opus 4.7 remain configured in the backend pricing/model table but are hidden from the official picker until they are ready to open.
+Users can also add personal provider keys in the dashboard Settings panel. These keys are stored only in the browser's local storage and are sent to the API only for the selected request.
 
-Users can also add own API keys from the dashboard Settings panel. These own-model credentials are stored only in the browser's local storage and are sent to the API only for the selected request; they are not written to the SlideLeaf database. Clearing browser cache or site data removes them.
-
-## Credits
-
-SlideLeaf uses credits for official server model calls:
-
-- `1 USD = 1000 credits`.
-- Official model usage is billed at the direct API token price converted to credits, then multiplied by `1.5`.
-- Own API keys configured in Settings do not consume SlideLeaf credits.
-- Balances are stored as integer credits; token charges are rounded up to the next whole credit.
-
-Current official pricing table:
-
-| Model | Input credits / 1M tokens | Output credits / 1M tokens | UI status |
-| --- | ---: | ---: | --- |
-| DeepSeek V4 Pro | 652.5 | 1305 | Official picker |
-| Gemini 3.1 Flash Lite | 375 | 2250 | Official picker |
-| Claude Sonnet 4.6 | 4500 | 22500 | Backend ready, hidden |
-| Claude Opus 4.7 | 7500 | 37500 | Backend ready, hidden |
-
-DeepSeek V4 Pro uses the current cache-miss promotional rate captured on 2026-05-10; update the pricing constants when provider pricing changes. The Prisma field is currently named `creditsMilli` for compatibility, but its value is treated as the account's displayed credit balance.
-
-Set `STARTING_CREDITS` in `.env` if new accounts should receive an initial balance during development or a private beta.
-
-## Useful Commands
-
-```bash
-pnpm build
-pnpm typecheck
-pnpm test
-pnpm prisma:push
-pnpm prisma:generate
-```
-
-Package-scoped examples:
-
-```bash
-pnpm --filter @slideleaf/web typecheck
-pnpm --filter @slideleaf/api test
-pnpm --filter @slideleaf/renderer test
-```
-
-## Implemented Surface
-
-- Cookie-based register, login, logout, and Google OAuth hooks.
-- Project dashboard with template project creation.
-- Overleaf-style workspace with file tree, editor, preview, compile log, and member roles.
-- Text file create, update, rename, and delete APIs.
-- Asset upload UI is reserved for the future document/image ingestion workflow.
-- BullMQ compile queue and worker-based rendering.
-- MinIO-backed static deck upload and `/share/:shareSlug` rendering.
-- AI workspace generation with review, apply, and reject flow.
-- DeckPlan-first AI workflow with visual directions and modular multi-slide output.
-- Local AI Playbook with deck archetypes, analysis operators, visual patterns, style directions, motion presets, QA rules, and examples.
-
-## Quality Principles
-
-SlideLeaf is designed around a few constraints that make AI output more reliable:
-
-- Plan before generating.
-- Keep deck structure explicit and reviewable.
-- Generate source files, not hidden artifacts.
-- Use a stable file index instead of guessing which slides to compile.
-- Keep style and runtime global.
-- Prevent per-slide scripts and one-off styling from fragmenting the deck.
-- Treat AI output as a patch until the user applies it.
-
-## Roadmap
-
-- Stronger persisted AI run recovery and background job visibility.
-- More complete deck archetypes and visual pattern coverage.
-- Provider-level tool calling for playbook lookup and context assembly.
-- Golden example decks for investor, board, product strategy, technical architecture, and market entry workflows.
-- Playwright visual checks for compiled deck overflow and responsiveness.
-- PDF export.
-- Real-time collaborative editing.
 
 ## Deployment
 
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for GitHub publishing, production environment variables, and deployment options across Vercel, Railway, Render, and VPS/Docker Compose.
+Docker is the recommended deployment path. It keeps the web app, API, worker, database, Redis, and object storage wiring explicit and avoids cross-domain cookie issues by letting the web app proxy browser API traffic through `/api/...`.
 
-Before pushing to GitHub, confirm local secrets are ignored:
+Create `.env` from the example, set production secrets and provider keys, then run:
 
 ```bash
-git status --ignored
+docker compose up --build
 ```
+
+## Roadmap / Not Yet Implemented
+
+- Persisted AI run recovery and clearer background job visibility
+- Stronger visual QA for compiled decks
+- PDF export from compiled HTML decks
+- Document/image ingestion for evidence-driven decks
+- Preview inline text editing with source-file patches
+- Simple visual layout adjustments in preview, such as moving or resizing selected blocks
+- More deck archetypes and golden example decks
+- Real-time collaborative editing
+
+## Contributing
+
+Contributions are welcome.
 
 ## License
 
