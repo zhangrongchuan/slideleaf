@@ -104,7 +104,7 @@ export function localProviderDisplayName(provider: LocalAiProviderKind): string 
 
 export function defaultModelForLocalProvider(provider: LocalAiProviderKind): string {
   if (provider === "deepseek") return "deepseek-v4-pro";
-  if (provider === "gemini") return "gemini-3.1-flash-lite";
+  if (provider === "gemini") return "gemini-3-flash-preview";
   return "claude-sonnet-4-6";
 }
 

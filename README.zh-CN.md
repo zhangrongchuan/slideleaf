@@ -154,7 +154,7 @@ DEEPSEEK_API_KEY="..."
 DEEPSEEK_MODEL="deepseek-v4-pro"
 
 GEMINI_API_KEY="..."
-GEMINI_MODEL="gemini-3.1-flash-lite"
+GEMINI_MODEL="gemini-3-flash-preview"
 
 ANTHROPIC_API_KEY="..."
 ANTHROPIC_SONNET_MODEL="claude-sonnet-4-6"

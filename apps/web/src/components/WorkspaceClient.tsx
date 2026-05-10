@@ -1582,7 +1582,7 @@ function ModelPicker({
   const [open, setOpen] = useState(false);
   const options: Array<{ value: AiProvider; label: string; description: string; source: "official" | "own" }> = [
     { value: "deepseek", label: "DeepSeek Pro", description: "Official server model · uses credits", source: "official" },
-    { value: "gemini", label: "Gemini Flash Lite", description: "Official server model · uses credits", source: "official" },
+    { value: "gemini", label: "Gemini 3 Flash Preview", description: "Official server model · uses credits", source: "official" },
     // Official Claude models are hidden for now. Users can still add their own Claude key in AI settings.
     // { value: "claude-sonnet", label: "Claude Sonnet", description: "Official server model · uses credits", source: "official" },
     // { value: "claude-opus", label: "Claude Opus", description: "Official server model · uses credits", source: "official" },

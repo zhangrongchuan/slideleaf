@@ -2504,10 +2504,11 @@ function officialModelPricing(config: AiProviderConfig): OfficialModelPricing | 
       outputUsdPerMillion: 0.87
     };
   }
-  if (config.provider === "gemini" && model.includes("gemini-3.1-flash-lite")) {
+  if (config.provider === "gemini" && model.includes("gemini-3-flash-preview")) {
     return {
-      inputUsdPerMillion: 0.25,
-      outputUsdPerMillion: 1.5
+      // Gemini 3 Flash Preview paid tier text/image/video pricing, observed 2026-05-11.
+      inputUsdPerMillion: 0.5,
+      outputUsdPerMillion: 3
     };
   }
   if (config.provider === "anthropic" && model.includes("opus")) {
@@ -2593,7 +2594,7 @@ function resolveAiConfig(providerOverride?: string, customProvider?: unknown): A
       baseUrl: normalizeBaseUrl(
         process.env.GEMINI_BASE_URL || process.env.AI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai"
       ),
-      model: process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-3.1-flash-lite",
+      model: process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-3-flash-preview",
       isCustom: false,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
@@ -2798,7 +2799,7 @@ function resolveCustomAiConfig(providerOverride: string | undefined, customProvi
       provider,
       apiKey,
       baseUrl: normalizeBaseUrl(customBaseUrl || "https://generativelanguage.googleapis.com/v1beta/openai"),
-      model: customModel || "gemini-3.1-flash-lite",
+      model: customModel || "gemini-3-flash-preview",
       isCustom: true,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
