@@ -22,9 +22,18 @@ type ProjectSummary = {
   updatedAt: string;
 };
 
+type CurrentUser = {
+  id: string;
+  email: string;
+  name: string | null;
+  credits: number;
+  creditsMilli: number;
+};
+
 export function DashboardClient() {
   const router = useRouter();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [title, setTitle] = useState("Untitled Presentation");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -40,9 +49,12 @@ export function DashboardClient() {
     setLoading(true);
     setError("");
     try {
-      await apiFetch("/auth/me");
-      const data = await apiFetch<{ projects: ProjectSummary[] }>("/projects");
-      setProjects(data.projects);
+      const [meData, projectsData] = await Promise.all([
+        apiFetch<{ user: CurrentUser }>("/auth/me"),
+        apiFetch<{ projects: ProjectSummary[] }>("/projects")
+      ]);
+      setCurrentUser(meData.user);
+      setProjects(projectsData.projects);
     } catch (err) {
       router.push("/login");
     } finally {
@@ -120,17 +132,29 @@ export function DashboardClient() {
     saveLocalAiProviders(next);
   }
 
+  async function updateProfile(input: { name: string; email: string }) {
+    const data = await apiFetch<{ user: CurrentUser }>("/auth/me", {
+      method: "PATCH",
+      body: JSON.stringify(input)
+    });
+    setCurrentUser(data.user);
+    return data.user;
+  }
+
   return (
     <main className="min-h-screen bg-[var(--app-bg)]">
       <header className="flex h-14 items-center justify-between border-b border-white/10 bg-[#0b1020] px-6 text-white shadow-[0_10px_30px_rgba(15,23,42,0.18)]">
         <BrandMark href="/dashboard" nameClassName="font-semibold text-white" markClassName="bg-transparent" />
         <div className="flex items-center gap-2">
+          <span className="inline-flex h-9 items-center rounded-lg border border-white/15 bg-white/8 px-3 text-sm text-slate-100">
+            Credits {formatCreditBalance(currentUser?.credits ?? 0)}
+          </span>
           <button
             onClick={() => setSettingsOpen(true)}
             className="inline-flex h-9 items-center gap-2 rounded-lg border border-white/15 bg-white/8 px-3 text-sm text-slate-100 transition hover:bg-white/12"
           >
             <Settings size={16} />
-            Settings
+            AI settings
           </button>
           <button
             onClick={logout}
@@ -143,8 +167,10 @@ export function DashboardClient() {
       </header>
 
       {settingsOpen ? (
-        <AiSettingsPanel
+        <SettingsPanel
+          user={currentUser}
           providers={localProviders}
+          onProfileSave={updateProfile}
           onSave={saveProvider}
           onDelete={deleteProvider}
           onClose={() => setSettingsOpen(false)}
@@ -159,7 +185,7 @@ export function DashboardClient() {
             </div>
             <h1 className="text-3xl font-semibold tracking-[-0.03em] text-slate-950">Projects</h1>
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Manage editable workspaces, compile HTML decks, and review AI-generated changes before applying them.
+              Create source-based slide workspaces, compile HTML decks, and review AI patches before they land.
             </p>
           </div>
 
@@ -171,7 +197,7 @@ export function DashboardClient() {
             />
             <button className="inline-flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(37,99,235,0.25)] transition hover:bg-blue-700">
               <Plus size={16} />
-              New
+              New project
             </button>
           </form>
         </div>
@@ -184,7 +210,7 @@ export function DashboardClient() {
           <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center shadow-sm">
             <FilePlus2 className="mx-auto mb-3 text-slate-400" />
             <p className="font-medium text-slate-900">No projects yet</p>
-            <p className="mt-1 text-sm text-slate-500">Create a workspace to start a controlled HTML deck workflow.</p>
+            <p className="mt-1 text-sm text-slate-500">Create your first workspace to start a controlled HTML deck workflow.</p>
           </div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
@@ -234,17 +260,26 @@ export function DashboardClient() {
   );
 }
 
-function AiSettingsPanel({
+function SettingsPanel({
+  user,
   providers,
+  onProfileSave,
   onSave,
   onDelete,
   onClose
 }: {
+  user: CurrentUser | null;
   providers: LocalAiProviderConfig[];
+  onProfileSave: (input: { name: string; email: string }) => Promise<CurrentUser>;
   onSave: (provider: LocalAiProviderConfig) => void;
   onDelete: (providerId: string) => void;
   onClose: () => void;
 }) {
+  const [profileName, setProfileName] = useState(user?.name ?? "");
+  const [profileEmail, setProfileEmail] = useState(user?.email ?? "");
+  const [profileError, setProfileError] = useState("");
+  const [profileNotice, setProfileNotice] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
   const [provider, setProvider] = useState<LocalAiProviderKind>("deepseek");
   const [label, setLabel] = useState("Own DeepSeek");
   const [apiKey, setApiKey] = useState("");
@@ -253,6 +288,11 @@ function AiSettingsPanel({
   const [sonnetModel, setSonnetModel] = useState("claude-sonnet-4-6");
   const [opusModel, setOpusModel] = useState("claude-opus-4-7");
   const [formError, setFormError] = useState("");
+
+  useEffect(() => {
+    setProfileName(user?.name ?? "");
+    setProfileEmail(user?.email ?? "");
+  }, [user?.email, user?.name]);
 
   function changeProvider(nextProvider: LocalAiProviderKind) {
     setProvider(nextProvider);
@@ -285,6 +325,26 @@ function AiSettingsPanel({
     setFormError("");
   }
 
+  async function submitProfile(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setProfileError("");
+    setProfileNotice("");
+    setProfileSaving(true);
+    try {
+      const updated = await onProfileSave({
+        name: profileName,
+        email: profileEmail
+      });
+      setProfileName(updated.name ?? "");
+      setProfileEmail(updated.email);
+      setProfileNotice("Profile updated");
+    } catch (err) {
+      setProfileError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 px-4 py-6 backdrop-blur-sm">
       <section className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-2xl border border-slate-200 bg-white shadow-[0_30px_100px_rgba(15,23,42,0.28)]">
@@ -292,10 +352,10 @@ function AiSettingsPanel({
           <div>
             <div className="flex items-center gap-2 text-base font-semibold text-slate-950">
               <KeyRound size={18} />
-              AI model settings
+              Settings
             </div>
             <p className="mt-1 text-sm leading-6 text-slate-600">
-              Official models use the server configuration. Own models use API keys stored only in this browser cache, not in SlideLeaf's database.
+              Manage your profile and local AI model keys for this browser.
             </p>
           </div>
           <button onClick={onClose} className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900">
@@ -303,10 +363,59 @@ function AiSettingsPanel({
           </button>
         </div>
 
-        <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_280px]">
-          <form onSubmit={submit} className="space-y-4">
+        <div className="space-y-5 p-5">
+          <form onSubmit={submitProfile} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-4">
+              <div className="text-sm font-semibold text-slate-950">Account profile</div>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Update the name and email shown across your workspaces.
+              </p>
+            </div>
+            <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-900">
+              Official model balance: <span className="font-semibold">{formatCreditBalance(user?.credits ?? 0)} credits</span>.
+              Own API keys do not consume SlideLeaf credits.
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1.5 text-sm font-medium text-slate-700">
+                Name
+                <input
+                  value={profileName}
+                  onChange={(event) => setProfileName(event.target.value)}
+                  placeholder="Your name"
+                  className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                />
+              </label>
+              <label className="space-y-1.5 text-sm font-medium text-slate-700">
+                Email
+                <input
+                  value={profileEmail}
+                  onChange={(event) => setProfileEmail(event.target.value)}
+                  type="email"
+                  required
+                  className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                />
+              </label>
+            </div>
+            {profileError ? <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{profileError}</div> : null}
+            {profileNotice ? <div className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{profileNotice}</div> : null}
+            <button
+              disabled={profileSaving || !user}
+              className="mt-4 inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+            >
+              {profileSaving ? "Saving..." : "Save profile"}
+            </button>
+          </form>
+
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_280px]">
+          <form onSubmit={submit} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4">
+            <div>
+              <div className="text-sm font-semibold text-slate-950">AI model keys</div>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                Add personal provider keys that appear in the workspace model picker.
+              </p>
+            </div>
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-900">
-              Your API key stays in browser local storage and is sent to the API only when you select that own model. Clearing browser cache/site data removes it.
+              Stored only in this browser. The key is sent to the API only when you select that own model. Clearing site data removes it.
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
@@ -345,7 +454,7 @@ function AiSettingsPanel({
             </label>
 
             <label className="space-y-1.5 text-sm font-medium text-slate-700">
-              Base URL optional
+              Base URL (optional)
               <input
                 value={baseUrl}
                 onChange={(event) => setBaseUrl(event.target.value)}
@@ -394,12 +503,12 @@ function AiSettingsPanel({
 
             <button className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800">
               <Plus size={15} />
-              Add own model
+              Add model
             </button>
           </form>
 
-          <div className="space-y-3">
-            <div className="text-sm font-semibold text-slate-900">Saved in this browser</div>
+          <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-sm font-semibold text-slate-900">Own models on this browser</div>
             {providers.length ? (
               providers.map((item) => (
                 <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
@@ -423,12 +532,20 @@ function AiSettingsPanel({
               ))
             ) : (
               <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm leading-6 text-slate-500">
-                No own models yet. Add one here, then open a project and select it from the model menu.
+                No own models yet. Add one here, then select it from the model menu inside a workspace.
               </div>
             )}
+          </div>
           </div>
         </div>
       </section>
     </div>
   );
+}
+
+function formatCreditBalance(value: number): string {
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3
+  });
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
@@ -24,7 +25,6 @@ import {
   Share2,
   Sparkles,
   Trash2,
-  Upload,
   Users,
   X
 } from "lucide-react";
@@ -48,6 +48,14 @@ type Project = {
   title: string;
   description?: string | null;
   currentUserRole?: ProjectRole;
+};
+
+type CurrentUser = {
+  id: string;
+  email: string;
+  name: string | null;
+  credits: number;
+  creditsMilli: number;
 };
 
 type ProjectRole = "owner" | "editor" | "viewer";
@@ -162,12 +170,16 @@ type AiWorkflowResponse = {
 };
 
 export function WorkspaceClient({ projectId }: { projectId: string }) {
+  const router = useRouter();
   const [project, setProject] = useState<Project | null>(null);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [selectedFileId, setSelectedFileId] = useState("");
   const [content, setContent] = useState("");
   const [dirty, setDirty] = useState(false);
-  const [error, setError] = useState("");
+  const [aiError, setAiError] = useState("");
+  const [operationError, setOperationError] = useState("");
+  const [membersError, setMembersError] = useState("");
   const [notice, setNotice] = useState("");
   const [newPath, setNewPath] = useState("slides/04-new-slide.html");
   const [newKind, setNewKind] = useState<"file" | "folder">("file");
@@ -268,10 +280,19 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   useEffect(() => {
     if (!shouldPollAi) return;
     const interval = window.setInterval(() => {
-      void loadAiWorkflow().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      void loadAiWorkflow().catch((err) => setOperationError(err instanceof Error ? err.message : String(err)));
     }, 1800);
     return () => window.clearInterval(interval);
   }, [shouldPollAi, projectId]);
+
+  useEffect(() => {
+    if (!notice && !operationError) return;
+    const timeout = window.setTimeout(() => {
+      setNotice("");
+      setOperationError("");
+    }, operationError ? 7000 : 3600);
+    return () => window.clearTimeout(timeout);
+  }, [notice, operationError]);
 
   useEffect(() => {
     if (selectedFile && selectedFile.kind === "file" && !selectedFile.isBinary) {
@@ -338,14 +359,16 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }, [dragTarget, effectiveLeftWidth, maxCenterWidth, maxLeftWidth]);
 
   async function loadProject() {
-    setError("");
+    setOperationError("");
     try {
-      const [projectData, filesData, aiData] = await Promise.all([
+      const [projectData, filesData, aiData, meData] = await Promise.all([
         apiFetch<{ project: Project }>(`/projects/${projectId}`),
         apiFetch<{ files: ProjectFile[] }>(`/projects/${projectId}/files`),
-        apiFetch<AiWorkflowResponse>(`/projects/${projectId}/ai/workflow`)
+        apiFetch<AiWorkflowResponse>(`/projects/${projectId}/ai/workflow`),
+        apiFetch<{ user: CurrentUser }>("/auth/me")
       ]);
       setProject(projectData.project);
+      setCurrentUser(meData.user);
       setFiles(filesData.files);
       setAiConversation(aiData.conversation);
       setAiMessages(aiData.messages);
@@ -360,9 +383,8 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         }, 200);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-      setAiTask({ id: "pending", status: "failed", log: message });
+      const message = errorMessage(err);
+      setOperationError(message);
     }
   }
 
@@ -373,7 +395,11 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   }
 
   async function loadAiWorkflow() {
-    const data = await apiFetch<AiWorkflowResponse>(`/projects/${projectId}/ai/workflow`);
+    const [data, meData] = await Promise.all([
+      apiFetch<AiWorkflowResponse>(`/projects/${projectId}/ai/workflow`),
+      apiFetch<{ user: CurrentUser }>("/auth/me")
+    ]);
+    setCurrentUser(meData.user);
     setAiConversation(data.conversation);
     setAiMessages(data.messages);
     setAiArtifacts(data.artifacts);
@@ -406,14 +432,15 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   async function openMembersPanel() {
     setMembersOpen((value) => !value);
     if (!membersOpen) {
-      await loadMembers().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      setMembersError("");
+      await loadMembers().catch((err) => setMembersError(errorMessage(err)));
     }
   }
 
   async function inviteMember(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!isOwner || !inviteEmail.trim()) return;
-    setError("");
+    setMembersError("");
     try {
       await apiFetch<{ member: ProjectMember }>(`/projects/${projectId}/members`, {
         method: "POST",
@@ -423,13 +450,13 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       await loadMembers();
       setNotice("Member invited");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setMembersError(errorMessage(err));
     }
   }
 
   async function changeMemberRole(memberId: string, role: ProjectRole) {
     if (!isOwner) return;
-    setError("");
+    setMembersError("");
     try {
       await apiFetch<{ member: ProjectMember }>(`/projects/${projectId}/members/${memberId}`, {
         method: "PATCH",
@@ -438,20 +465,33 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       await loadMembers();
       setNotice("Member role updated");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setMembersError(errorMessage(err));
     }
   }
 
   async function removeMember(member: ProjectMember) {
     if (!isOwner) return;
     if (!window.confirm(`Remove ${member.user.email} from this project?`)) return;
-    setError("");
+    setMembersError("");
     try {
       await apiFetch(`/projects/${projectId}/members/${member.id}`, { method: "DELETE" });
       await loadMembers();
       setNotice("Member removed");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setMembersError(errorMessage(err));
+    }
+  }
+
+  async function leaveProject() {
+    if (currentRole === "owner") return;
+    if (!window.confirm(`Leave "${project?.title ?? "this project"}"? You will lose access unless an owner invites you again.`)) return;
+    setMembersError("");
+    try {
+      await apiFetch(`/projects/${projectId}/leave`, { method: "POST" });
+      router.push("/dashboard");
+      router.refresh();
+    } catch (err) {
+      setMembersError(errorMessage(err));
     }
   }
 
@@ -470,12 +510,12 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   async function saveFile() {
     if (!canEdit) return;
     if (!selectedFile || selectedFile.kind !== "file" || selectedFile.isBinary) return;
-    setError("");
+    setOperationError("");
     const data = await apiFetch<{ file: ProjectFile }>(`/projects/${projectId}/files/${selectedFile.id}`, {
       method: "PATCH",
       body: JSON.stringify({ contentText: content })
     }).catch((err) => {
-      setError(err instanceof Error ? err.message : String(err));
+      setOperationError(errorMessage(err));
       return null;
     });
     if (!data) return;
@@ -487,7 +527,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   async function createWorkspaceEntry(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canEdit) return;
-    setError("");
+    setOperationError("");
     try {
       const data = await apiFetch<{ file: ProjectFile }>(`/projects/${projectId}/files`, {
         method: "POST",
@@ -501,7 +541,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       setActiveTab("file");
       setNewPath(newKind === "file" ? "slides/new-slide.html" : "slides/new-folder");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setOperationError(errorMessage(err));
     }
   }
 
@@ -510,7 +550,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     if (!selectedFile) return;
     const nextPath = window.prompt("New workspace path", selectedFile.path);
     if (!nextPath || nextPath === selectedFile.path) return;
-    setError("");
+    setOperationError("");
     try {
       const data = await apiFetch<{ file: ProjectFile }>(`/projects/${projectId}/files/${selectedFile.id}`, {
         method: "PATCH",
@@ -519,7 +559,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       await reloadFiles(data.file.id);
       setNotice("Renamed");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setOperationError(errorMessage(err));
     }
   }
 
@@ -527,7 +567,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     if (!canEdit) return;
     if (!selectedFile) return;
     if (!window.confirm(`Delete ${selectedFile.path}?`)) return;
-    setError("");
+    setOperationError("");
     try {
       await apiFetch(`/projects/${projectId}/files/${selectedFile.id}`, { method: "DELETE" });
       setSelectedFileId("");
@@ -535,7 +575,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       await reloadFiles("");
       setNotice("Deleted");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setOperationError(errorMessage(err));
     }
   }
 
@@ -545,7 +585,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     if (!file) return;
     const formData = new FormData();
     formData.append("file", file);
-    setError("");
+    setOperationError("");
     try {
       const data = await apiFetch<{ file: ProjectFile }>(`/projects/${projectId}/assets`, {
         method: "POST",
@@ -554,7 +594,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       await reloadFiles(data.file.id);
       setNotice("Asset uploaded");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setOperationError(errorMessage(err));
     } finally {
       if (uploadRef.current) uploadRef.current.value = "";
     }
@@ -562,8 +602,8 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
 
   async function compile(options: { auto?: boolean } = {}) {
     if (dirty) await saveFile();
-    setError("");
-    setNotice(options.auto ? "Compiling current project..." : "");
+    setOperationError("");
+    setNotice(options.auto ? "" : "Compiling current project...");
     setCompileJob({ id: "pending", status: "queued", log: options.auto ? "Auto compile queued" : "Queued compile job" });
     try {
       const created = await apiFetch<{ jobId: string; status: CompileJob["status"] }>(`/projects/${projectId}/compile`, {
@@ -586,12 +626,12 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setOperationError(errorMessage(err));
     }
   }
 
   async function createSnapshot() {
-    setError("");
+    setOperationError("");
     try {
       await apiFetch(`/projects/${projectId}/versions`, {
         method: "POST",
@@ -599,7 +639,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       });
       setNotice("Snapshot saved");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setOperationError(errorMessage(err));
     }
   }
 
@@ -617,7 +657,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
 
   async function submitAiPrompt(prompt: string, displayLabel?: string) {
     if (!canEdit) return;
-    setError("");
+    setAiError("");
     setLastAiPrompt(displayLabel || prompt);
     setAiInstruction("");
     setAiTask({ id: "pending", status: "running" });
@@ -641,7 +681,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         setLastAiPrompt("");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setAiError(errorMessage(err));
     }
   }
 
@@ -649,7 +689,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     if (!canEdit) return;
     const prompt = promptOverride?.trim() || aiInstruction.trim();
     const visiblePrompt = displayLabel || prompt || `Generate ${artifactLabel(type)}`;
-    setError("");
+    setAiError("");
     setAiInstruction("");
     setLastAiPrompt(visiblePrompt);
     setWorkflowRun({ type, label: workflowRunLabel(type) });
@@ -677,7 +717,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       }
       setLastAiPrompt("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setAiError(errorMessage(err));
     } finally {
       setWorkflowRun(null);
     }
@@ -687,7 +727,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     if (!canEdit) return;
     if (htmlGenerationRequested || aiTask?.status === "running") return;
     setHtmlGenerationRequested(true);
-    setError("");
+    setAiError("");
     setAiInstruction("");
     setLastAiPrompt("Freeze DeckPlan and generate slides page by page");
     setAiTask({ id: "pending", status: "running" });
@@ -717,8 +757,9 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       await loadAiWorkflow();
       setLastAiPrompt("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setAiTask({ id: "pending", status: "failed", log: err instanceof Error ? err.message : String(err) });
+      const message = errorMessage(err);
+      setAiError(message);
+      setAiTask({ id: "pending", status: "failed", log: message });
     }
   }
 
@@ -737,7 +778,7 @@ Return complete replacement workspace files for review. Preserve the chosen deck
   async function applyAiTask() {
     if (!canEdit) return;
     if (!aiTask || aiTask.status !== "needs_review") return;
-    setError("");
+    setOperationError("");
     try {
       await apiFetch(`/projects/${projectId}/ai/tasks/${aiTask.id}/apply`, { method: "POST" });
       setAiTask(null);
@@ -750,7 +791,7 @@ Return complete replacement workspace files for review. Preserve the chosen deck
       setNotice("AI workspace patch applied");
       await compile({ auto: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setOperationError(errorMessage(err));
     }
   }
 
@@ -765,6 +806,17 @@ Return complete replacement workspace files for review. Preserve the chosen deck
 
   return (
     <main className="workspace-shell bg-[var(--app-bg)]">
+      {operationError || notice ? (
+        <WorkspaceToast
+          tone={operationError ? "error" : "success"}
+          message={operationError || notice}
+          onClose={() => {
+            setOperationError("");
+            setNotice("");
+          }}
+        />
+      ) : null}
+
       <header className="relative flex items-center justify-between border-b border-white/10 bg-[#0b1020] px-4 text-white shadow-[0_12px_36px_rgba(15,23,42,0.20)]">
         <div className="flex min-w-0 items-center gap-2 truncate text-sm font-semibold">
           <BrandMark
@@ -781,10 +833,13 @@ Return complete replacement workspace files for review. Preserve the chosen deck
           <span className="rounded-full border border-white/10 bg-white/8 px-2 py-1 text-xs text-slate-300">
             {roleLabel(currentRole)}
           </span>
+          <span className="rounded-full border border-white/10 bg-white/8 px-2 py-1 text-xs text-slate-300">
+            Credits {formatCreditBalance(currentUser?.credits ?? 0)}
+          </span>
           <ToolbarButton onClick={() => void openMembersPanel()} label="Members">
             <Users size={16} />
           </ToolbarButton>
-          <ToolbarButton onClick={() => setLogOpen((value) => !value)} label="Compile Log">
+          <ToolbarButton onClick={() => setLogOpen((value) => !value)} label="Compile log">
             <Logs size={16} />
           </ToolbarButton>
           <ToolbarButton onClick={saveFile} disabled={!canEdit || !dirty || activeTab !== "file"} label="Save">
@@ -797,7 +852,8 @@ Return complete replacement workspace files for review. Preserve the chosen deck
           {/* <ToolbarButton onClick={createSnapshot} label="Snapshot">
             <History size={16} />
           </ToolbarButton> */}
-          <ToolbarButton onClick={() => uploadRef.current?.click()} disabled={!canEdit} label="Upload asset">
+          {/* Asset upload is hidden until image/document ingestion is ready. */}
+          {/* <ToolbarButton onClick={() => uploadRef.current?.click()} disabled={!canEdit} label="Upload asset">
             <Upload size={16} />
           </ToolbarButton>
           <input
@@ -806,14 +862,14 @@ Return complete replacement workspace files for review. Preserve the chosen deck
             type="file"
             accept="image/png,image/jpeg,image/gif,image/webp"
             onChange={(event) => void uploadAsset(event.target.files)}
-          />
+          /> */}
           {compileJob?.shareSlug ? (
             <a
               href={`/share/${compileJob.shareSlug}`}
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-white/15 bg-white/8 px-3 text-sm text-slate-100 transition hover:bg-white/12"
             >
               <Share2 size={16} />
-              Share
+              Show
             </a>
           ) : null}
           {compileJob?.status === "success" && compileJob.id !== "pending" ? (
@@ -831,7 +887,7 @@ Return complete replacement workspace files for review. Preserve the chosen deck
         {logOpen ? (
           <div className="absolute right-4 top-[48px] z-30 w-[520px] max-w-[calc(100vw-32px)] overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-950 shadow-[0_24px_80px_rgba(15,23,42,0.22)]">
             <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold">
-              <span>Compile Log</span>
+              <span>Compile log</span>
               <button onClick={() => setLogOpen(false)} className="rounded-md p-1 hover:bg-slate-200">
                 <X size={15} />
               </button>
@@ -846,13 +902,17 @@ Return complete replacement workspace files for review. Preserve the chosen deck
           <MembersPanel
             members={members}
             isOwner={isOwner}
+            currentUserId={currentUser?.id ?? ""}
+            canLeaveProject={currentRole !== "owner"}
             inviteEmail={inviteEmail}
             inviteRole={inviteRole}
+            error={membersError}
             onInviteEmailChange={setInviteEmail}
             onInviteRoleChange={setInviteRole}
             onInvite={inviteMember}
             onRoleChange={changeMemberRole}
             onRemove={removeMember}
+            onLeaveProject={leaveProject}
             onClose={() => setMembersOpen(false)}
           />
         ) : null}
@@ -932,7 +992,7 @@ Return complete replacement workspace files for review. Preserve the chosen deck
               workflowRun={workflowRun}
               task={aiTask}
               htmlGenerationRequested={htmlGenerationRequested}
-              error={error}
+              error={aiError}
               onInstructionChange={setAiInstruction}
               onModeChange={setAiMode}
               onProviderChange={setAiProvider}
@@ -962,33 +1022,80 @@ Return complete replacement workspace files for review. Preserve the chosen deck
   );
 }
 
+function WorkspaceToast({
+  tone,
+  message,
+  onClose
+}: {
+  tone: "success" | "error";
+  message: string;
+  onClose: () => void;
+}) {
+  const isError = tone === "error";
+  return (
+    <div className="fixed right-4 top-16 z-50 max-w-[min(420px,calc(100vw-32px))]">
+      <div
+        className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-[0_22px_60px_rgba(15,23,42,0.22)] ${
+          isError
+            ? "border-red-100 bg-red-50 text-red-800"
+            : "border-emerald-100 bg-emerald-50 text-emerald-800"
+        }`}
+      >
+        {isError ? (
+          <AlertTriangle size={17} className="mt-0.5 shrink-0" />
+        ) : (
+          <CheckCircle2 size={17} className="mt-0.5 shrink-0" />
+        )}
+        <div className="min-w-0 flex-1 leading-5">{message}</div>
+        <button
+          onClick={onClose}
+          className={`rounded-md p-0.5 transition ${
+            isError ? "hover:bg-red-100" : "hover:bg-emerald-100"
+          }`}
+          title="Dismiss"
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MembersPanel({
   members,
   isOwner,
+  currentUserId,
+  canLeaveProject,
   inviteEmail,
   inviteRole,
+  error,
   onInviteEmailChange,
   onInviteRoleChange,
   onInvite,
   onRoleChange,
   onRemove,
+  onLeaveProject,
   onClose
 }: {
   members: ProjectMember[];
   isOwner: boolean;
+  currentUserId: string;
+  canLeaveProject: boolean;
   inviteEmail: string;
   inviteRole: ProjectRole;
+  error: string;
   onInviteEmailChange: (value: string) => void;
   onInviteRoleChange: (value: ProjectRole) => void;
   onInvite: (event: React.FormEvent<HTMLFormElement>) => void;
   onRoleChange: (memberId: string, role: ProjectRole) => void;
   onRemove: (member: ProjectMember) => void;
+  onLeaveProject: () => void;
   onClose: () => void;
 }) {
   return (
     <div className="absolute right-4 top-[48px] z-30 w-[520px] max-w-[calc(100vw-32px)] overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-950 shadow-[0_24px_80px_rgba(15,23,42,0.22)]">
       <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold">
-        <span>Project Members</span>
+        <span>Project members</span>
         <button onClick={onClose} className="rounded-md p-1 hover:bg-slate-200">
           <X size={15} />
         </button>
@@ -997,6 +1104,13 @@ function MembersPanel({
         <p className="text-xs leading-5 text-slate-500">
           Members share project files and compiled output. AI conversations and prompts stay private to each user.
         </p>
+
+        {error ? (
+          <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm leading-5 text-red-700">
+            <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        ) : null}
 
         {isOwner ? (
           <form onSubmit={onInvite} className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2 sm:grid-cols-[1fr_120px_auto]">
@@ -1020,6 +1134,11 @@ function MembersPanel({
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-slate-900">
                   {member.user.name || member.user.email}
+                  {member.userId === currentUserId ? (
+                    <span className="ml-2 rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">
+                      You
+                    </span>
+                  ) : null}
                 </div>
                 <div className="truncate text-xs text-slate-500">{member.user.email}</div>
               </div>
@@ -1045,10 +1164,22 @@ function MembersPanel({
           ))}
           {!members.length ? (
             <div className="rounded-lg border border-dashed border-slate-300 p-3 text-sm text-slate-500">
-              No members loaded.
+              No members yet.
             </div>
           ) : null}
         </div>
+
+        {canLeaveProject ? (
+          <div className="border-t border-slate-200 pt-3">
+            <button
+              onClick={onLeaveProject}
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 text-sm font-semibold text-red-700 transition hover:bg-red-100"
+            >
+              <X size={14} />
+              Leave project
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1062,8 +1193,8 @@ function RoleSelect({ value, onChange }: { value: ProjectRole; onChange: (value:
       className="h-9 rounded-lg border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
     >
       <option value="owner">Owner</option>
-      <option value="editor">Edit</option>
-      <option value="viewer">View</option>
+      <option value="editor">Editor</option>
+      <option value="viewer">Viewer</option>
     </select>
   );
 }
@@ -1218,7 +1349,7 @@ function AssistantPane({
         </div>
         <div className="text-xs text-slate-500">
           {messages.length ? `${messages.length} saved messages · ` : ""}
-          HTML deck generation · review before apply
+          Staged AI workflow · review before apply
         </div>
       </div>
 
@@ -1289,7 +1420,7 @@ function AssistantPane({
               <div className="space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-slate-950">Generated workspace patch</div>
+                    <div className="text-sm font-semibold text-slate-950">Review generated patch</div>
                     {task.diffJson?.summary ? <div className="mt-1 text-sm text-slate-600">{task.diffJson.summary}</div> : null}
                   </div>
                   <div className="flex shrink-0 gap-2">
@@ -1355,18 +1486,13 @@ function AssistantPane({
               }}
               rows={2}
               className="block max-h-28 min-h-[54px] w-full resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed disabled:text-slate-400"
-              placeholder={canEdit ? "Describe the deck, refine the direction, or ask for changes..." : "View-only access: prompts are private and editing is disabled."}
+              placeholder={canEdit ? "Describe the deck, ask for a plan, or request a file change..." : "View-only access: you can read the workspace but cannot send edit requests."}
             />
             <div className="flex items-center justify-between gap-2 px-1 pt-1">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <ModePicker value={mode} onChange={onModeChange} />
                 <ModelPicker value={provider} localProviders={localProviders} onChange={onProviderChange} />
                 <TextDensityPicker value={textDensity} onChange={onTextDensityChange} />
-                <div className="truncate text-xs text-slate-400">
-                  {mode === "auto"
-                    ? `Auto uses ${shortStageLabel(conversation?.stage ?? "consultation")}`
-                    : `Manual: ${submitActionLabel(resolveSubmitAction(mode, conversation?.stage))}`}
-                </div>
               </div>
               <button
                 onClick={onAsk}
@@ -1379,7 +1505,7 @@ function AssistantPane({
             </div>
           </div>
           <div className="mt-1 text-center text-[11px] text-slate-400">
-            Press Ctrl+Enter to send. Generated files stay in review until you apply them.
+            Press Ctrl+Enter to send. AI changes remain reviewable until you apply them.
           </div>
         </div>
       </div>
@@ -1390,11 +1516,11 @@ function AssistantPane({
 function ModePicker({ value, onChange }: { value: AiMode; onChange: (value: AiMode) => void }) {
   const [open, setOpen] = useState(false);
   const options: Array<{ value: AiMode; label: string; description: string }> = [
-    { value: "auto", label: "Auto", description: "Follow current workflow" },
-    { value: "consultation", label: "Clarify", description: "Refine goal and constraints" },
+    { value: "auto", label: "Auto", description: "Continue staged workflow" },
+    { value: "consultation", label: "Clarify", description: "Brief and questions" },
     { value: "visual_direction", label: "Style", description: "Create visual directions" },
-    { value: "slide_plan", label: "Plan", description: "Narrative and slide structure" },
-    { value: "generate", label: "Edit", description: "Patch existing workspace files" }
+    { value: "slide_plan", label: "Plan", description: "DeckPlan and slide logic" },
+    { value: "generate", label: "Edit", description: "Patch current files" }
   ];
   const selected = options.find((item) => item.value === value) ?? options[0];
 
@@ -1456,23 +1582,24 @@ function ModelPicker({
 }) {
   const [open, setOpen] = useState(false);
   const options: Array<{ value: AiProvider; label: string; description: string; source: "official" | "own" }> = [
-    { value: "deepseek", label: "DeepSeek Pro", description: "Official server configuration", source: "official" },
-    { value: "gemini", label: "Gemini Flash Lite", description: "Official server configuration", source: "official" },
-    { value: "claude-sonnet", label: "Claude Sonnet", description: "Official server configuration", source: "official" },
-    { value: "claude-opus", label: "Claude Opus", description: "Official server configuration", source: "official" },
+    { value: "deepseek", label: "DeepSeek Pro", description: "Official server model · uses credits", source: "official" },
+    { value: "gemini", label: "Gemini Flash Lite", description: "Official server model · uses credits", source: "official" },
+    // Official Claude models are hidden for now. Users can still add their own Claude key in AI settings.
+    // { value: "claude-sonnet", label: "Claude Sonnet", description: "Official server model · uses credits", source: "official" },
+    // { value: "claude-opus", label: "Claude Opus", description: "Official server model · uses credits", source: "official" },
     ...localProviders.flatMap((provider) => {
       if (provider.provider === "anthropic") {
         return [
           {
             value: `local:${provider.id}:sonnet` as AiProvider,
             label: `${provider.label} Sonnet`,
-            description: "Own Claude key from browser cache",
+            description: "Your own Claude key from this browser",
             source: "own" as const
           },
           {
             value: `local:${provider.id}:opus` as AiProvider,
             label: `${provider.label} Opus`,
-            description: "Own Claude key from browser cache",
+            description: "Your own Claude key from this browser",
             source: "own" as const
           }
         ];
@@ -1481,7 +1608,7 @@ function ModelPicker({
         {
           value: `local:${provider.id}` as AiProvider,
           label: provider.label || `Own ${localProviderDisplayName(provider.provider)}`,
-          description: `Own ${localProviderDisplayName(provider.provider)} key from browser cache`,
+          description: `Your own ${localProviderDisplayName(provider.provider)} key from this browser`,
           source: "own" as const
         }
       ];
@@ -1786,6 +1913,7 @@ function GenerationSlideRow({ slide }: { slide: JsonRecord }) {
             </div>
           ) : null}
         </div>
+
       </div>
     </div>
   );
@@ -1921,9 +2049,9 @@ function AssistantWelcome() {
     <ChatBubble role="assistant">
       <div className="space-y-3">
         <div>
-          <div className="text-sm font-semibold text-slate-950">Tell me what this deck needs to achieve.</div>
+          <div className="text-sm font-semibold text-slate-950">Tell me what the deck needs to achieve.</div>
           <p className="mt-1 text-sm leading-6 text-slate-600">
-            I will clarify the goal, show visual directions, plan the storyline, then create editable HTML slides for review.
+            I will clarify the brief, explore style directions, plan the storyline, then generate editable HTML slides for review.
           </p>
         </div>
         <div className="grid gap-2 text-sm sm:grid-cols-2">
@@ -1961,9 +2089,9 @@ function StageActionCard({
         {stage === "generate" ? (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-slate-950">Ready to create the deck</div>
+              <div className="text-sm font-semibold text-slate-950">Ready to generate slide files</div>
               <p className="mt-1 text-xs leading-5 text-slate-600">
-                I will use the current brief, visual direction, and deck plan to create editable HTML files.
+                I will use the current brief, visual direction, and deck plan to create modular slide files for review.
               </p>
             </div>
             {!htmlGenerationRequested && !running && canEdit ? (
@@ -1972,7 +2100,7 @@ function StageActionCard({
                 className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-[0_14px_28px_rgba(15,23,42,0.22)] transition hover:bg-slate-800"
               >
                 <Sparkles size={15} />
-                Generate deck
+                Generate files
               </button>
             ) : null}
           </div>
@@ -2027,7 +2155,7 @@ function StageActionCard({
               />
             ) : (
               <div className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-500">
-                I need this step before creating final HTML. Use the chat box to add details, or click Start.
+                This step is required before final HTML generation. Add details in chat or click Start.
               </div>
             )}
           </div>
@@ -2478,7 +2606,7 @@ function PlanArtifact({
         <div>
           <div className="text-sm font-semibold text-blue-950">Plan is ready for generation</div>
           <p className="mt-1 text-xs leading-5 text-blue-800">
-            Generate editable HTML files with this storyline, visual system, and motion language.
+            Generate modular HTML files with this storyline, visual system, and motion language.
           </p>
         </div>
         <button
@@ -2487,7 +2615,7 @@ function PlanArtifact({
           className="inline-flex h-9 items-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
         >
           <Sparkles size={15} />
-          Generate deck
+          Generate files
         </button>
       </div>
       ) : null}
@@ -2670,6 +2798,7 @@ function MessageContent({ message }: { message: AiMessage }) {
 
   // Extract token usage
   const usage = message.metadata?.usage as { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
+  const creditCharge = message.metadata?.creditCharge as { credits?: number; remainingCredits?: number } | undefined;
 
   return (
     <div className="max-w-[34rem]">
@@ -2683,6 +2812,11 @@ function MessageContent({ message }: { message: AiMessage }) {
         {usage && (usage.inputTokens || usage.outputTokens) ? (
           <div className="inline-flex rounded-full bg-blue-50 px-2 py-1 text-[11px] text-blue-600 border border-blue-100 font-mono">
             {usage.totalTokens || (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)} tk ({usage.inputTokens} in, {usage.outputTokens} out)
+          </div>
+        ) : null}
+        {creditCharge?.credits ? (
+          <div className="inline-flex rounded-full border border-amber-100 bg-amber-50 px-2 py-1 text-[11px] font-mono text-amber-700">
+            -{formatCreditBalance(creditCharge.credits)} credits
           </div>
         ) : null}
       </div>
@@ -2801,7 +2935,7 @@ function PreviewPane({
     <section className="min-w-0 min-h-0 overflow-hidden bg-[#e5ebf3]">
       <PanelTitle>
         <div className="flex w-full items-center justify-between gap-3">
-          <span>Visualization</span>
+          <span>Preview</span>
           <span
             className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
               compileStatus === "success"
@@ -2969,8 +3103,8 @@ function StatusPill({ status }: { status?: CompileJob["status"] }) {
 
 function roleLabel(role: ProjectRole): string {
   if (role === "owner") return "Owner";
-  if (role === "editor") return "Edit";
-  return "View";
+  if (role === "editor") return "Editor";
+  return "Viewer";
 }
 
 function DiffLine({ line }: { line: DiffLineValue }) {
@@ -3082,17 +3216,12 @@ function resolveSubmitAction(mode: AiMode, stage?: WorkflowStage): SubmitAction 
   return artifactType ? { kind: "artifact", type: artifactType } : { kind: "edit" };
 }
 
-function submitActionLabel(action: SubmitAction): string {
-  if (action.kind === "edit") return "Edit workspace";
-  return artifactLabel(action.type);
-}
-
 function requireAiProviderPayload(
   value: AiProvider,
   providers: LocalAiProviderConfig[]
 ): AiProviderRequestPayload {
   const payload = aiProviderRequestPayload(value, providers);
-  if (!payload) throw new Error("Selected own AI model is no longer available. Reopen Settings and add it again.");
+  if (!payload) throw new Error("Selected own AI model is no longer available. Reopen AI settings and add it again.");
   return payload;
 }
 
@@ -3178,13 +3307,6 @@ function stageLabel(stage: WorkflowStage): string {
   if (stage === "visual_direction") return "Choose a visual direction";
   if (stage === "slide_plan") return "Review the deck plan";
   return "Create the HTML deck";
-}
-
-function shortStageLabel(stage: WorkflowStage): string {
-  if (stage === "consultation") return "Clarify";
-  if (stage === "visual_direction") return "Style";
-  if (stage === "slide_plan") return "Plan";
-  return "Create";
 }
 
 function stageDescription(stage: WorkflowStage): string {
@@ -3283,6 +3405,17 @@ function meaningfulList(items: string[]): string[] {
   return items.filter((item) => {
     const normalized = item.trim().toLowerCase();
     return normalized.length > 0 && !emptyMarkers.has(normalized);
+  });
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function formatCreditBalance(value: number): string {
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3
   });
 }
 

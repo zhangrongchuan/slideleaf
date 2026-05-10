@@ -100,6 +100,24 @@ type ProviderMessage = {
   content: string;
 };
 
+type TokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+};
+
+type CreditCharge = {
+  label: string;
+  provider: AiProviderConfig["provider"];
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  creditsMilli: number;
+  credits: number;
+  remainingCreditsMilli: number;
+  remainingCredits: number;
+};
+
 type DeckGenerationRunJson = {
   kind: "deck_generation_run";
   taskId?: string;
@@ -219,6 +237,7 @@ export class AiService {
             : "OPENAI_API_KEY is not configured"
       );
     }
+    await this.assertOfficialCreditsAvailable(userId, aiConfig);
 
     const task = await this.prisma.aiTask.create({
       data: {
@@ -272,6 +291,7 @@ export class AiService {
       instruction,
       density,
       aiConfig,
+      userId,
       taskId: task.id,
       artifactId: artifact.id,
       userMessageId: userMessage.id,
@@ -290,6 +310,7 @@ export class AiService {
     instruction: string;
     density: SlideTextDensity;
     aiConfig: AiProviderConfig;
+    userId: string;
     taskId: string;
     artifactId: string;
     userMessageId: string;
@@ -304,6 +325,7 @@ export class AiService {
       instruction,
       density,
       aiConfig,
+      userId,
       taskId,
       artifactId,
       userMessageId,
@@ -336,7 +358,14 @@ export class AiService {
       });
       const contentJson = response.contentJson;
       const usage = response.usage;
-      timer.mark("ai_artifact_response", { usage });
+      const playbookCreditCharge = await this.chargeOfficialModelUsage(
+        userId,
+        aiConfig,
+        response.playbookUsage,
+        "playbook"
+      );
+      const creditCharge = await this.chargeOfficialModelUsage(userId, aiConfig, usage, "artifact");
+      timer.mark("ai_artifact_response", { usage, creditCharge, playbookCreditCharge });
 
       const artifact = await this.prisma.aiArtifact.update({
         where: { id: artifactId },
@@ -357,7 +386,9 @@ export class AiService {
             artifactId: artifact.id,
             userMessageId,
             status: "updated",
-            usage
+            usage,
+            creditCharge,
+            playbookCreditCharge
           }
         }
       });
@@ -488,6 +519,7 @@ export class AiService {
               : "OPENAI_API_KEY is not configured"
       );
     }
+    await this.assertOfficialCreditsAvailable(userId, aiConfig);
 
     const planArtifact = body.planArtifactId
       ? await this.prisma.aiArtifact.findFirst({
@@ -569,6 +601,7 @@ export class AiService {
       conversationId: conversation.id,
       conversationSummary: conversation.summary ?? undefined,
       aiConfig,
+      userId,
       density,
       plan,
       slides,
@@ -588,6 +621,7 @@ export class AiService {
     conversationId: string;
     conversationSummary?: string;
     aiConfig: AiProviderConfig;
+    userId: string;
     density: SlideTextDensity;
     plan: DeckPlan;
     slides: DeckSlidePlan[];
@@ -602,6 +636,7 @@ export class AiService {
       conversationId,
       conversationSummary,
       aiConfig,
+      userId,
       density,
       plan,
       slides,
@@ -615,6 +650,7 @@ export class AiService {
       { path: "themes/deck.css", content: buildDefaultDeckCss(plan) },
       { path: "runtime/deck.js", content: buildDefaultDeckRuntime() }
     ];
+    const creditCharges: CreditCharge[] = [];
 
     try {
       const [existingFiles, workflowArtifacts] = await Promise.all([
@@ -650,6 +686,8 @@ export class AiService {
           workflowArtifacts,
           conversationSummary
         });
+        const creditCharge = await this.chargeOfficialModelUsage(userId, aiConfig, slideResult.usage, `slide:${slide.id}`);
+        if (creditCharge) creditCharges.push(creditCharge);
         const slideHtml = sanitizeSlideHtmlFragment(slideResult.slideHtml, slide);
         generatedFiles.push({ path: slideFilePath(slide), content: slideHtml });
 
@@ -660,7 +698,7 @@ export class AiService {
             data: { contentJson: runJson as unknown as Prisma.InputJsonValue }
           });
         }
-        timer.mark("slide_done", { slideId: slide.id });
+        timer.mark("slide_done", { slideId: slide.id, usage: slideResult.usage, creditCharge });
       }
 
       const diff = buildWorkspaceDiff({
@@ -696,6 +734,7 @@ export class AiService {
             workflowAction: "generated_deck",
             runArtifactId,
             changedFiles: diff.files.map((file) => ({ path: file.path, action: file.action })),
+            creditCharge: summarizeCreditCharges(creditCharges),
             status: "needs_review"
           }
         }
@@ -857,6 +896,7 @@ export class AiService {
     }
 
     try {
+      await this.assertOfficialCreditsAvailable(userId, aiConfig);
       const workflowArtifacts = await this.loadWorkflowArtifacts(conversation.id);
       timer.mark("load_workflow_artifacts", { artifacts: workflowArtifacts.length });
       const result = await requestAiWorkspaceRewrite({
@@ -872,11 +912,13 @@ export class AiService {
         selectedText: body.selectedText ?? undefined
       });
       const usage = result.usage;
+      const creditCharge = await this.chargeOfficialModelUsage(userId, aiConfig, usage, "workspace-edit");
       timer.mark("ai_workspace_response", {
         files: result.changes.files.length,
         deletes: result.changes.deletePaths.length,
         chars: result.changes.files.reduce((sum, file) => sum + file.content.length, 0),
-        usage
+        usage,
+        creditCharge
       });
 
       const diff = buildWorkspaceDiff({
@@ -912,7 +954,8 @@ export class AiService {
               path: file.path,
               action: file.action
             })),
-            usage
+            usage,
+            creditCharge
           }
         }
       });
@@ -1127,6 +1170,62 @@ export class AiService {
     }));
   }
 
+  private async assertOfficialCreditsAvailable(userId: string, config: AiProviderConfig): Promise<void> {
+    if (config.isCustom || !officialModelPricing(config)) return;
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { creditsMilli: true }
+    });
+    if (!user || user.creditsMilli <= 0) {
+      throw new BadRequestException("Official models require credits. Ask an admin to add credits or select an own API key in AI settings.");
+    }
+  }
+
+  private async chargeOfficialModelUsage(
+    userId: string,
+    config: AiProviderConfig,
+    usage: TokenUsage | undefined,
+    label: string
+  ): Promise<CreditCharge | undefined> {
+    if (config.isCustom || !usage) return undefined;
+    const pricing = officialModelPricing(config);
+    if (!pricing) return undefined;
+    const creditsMilli = calculateCreditsMilli(usage, pricing);
+    if (creditsMilli <= 0) return undefined;
+
+    const updated = await this.prisma.user.updateMany({
+      where: {
+        id: userId,
+        creditsMilli: { gte: creditsMilli }
+      },
+      data: {
+        creditsMilli: { decrement: creditsMilli }
+      }
+    });
+    if (updated.count !== 1) {
+      throw new BadRequestException(
+        `Insufficient credits for official ${config.model}. This request used ${formatCredits(creditsMilli)} credits. Ask an admin to add credits or select an own API key in AI settings.`
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { creditsMilli: true }
+    });
+    const remainingCreditsMilli = Math.max(0, user?.creditsMilli ?? 0);
+    return {
+      label,
+      provider: config.provider,
+      model: config.model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      creditsMilli,
+      credits: creditsMilli / 1000,
+      remainingCreditsMilli,
+      remainingCredits: remainingCreditsMilli / 1000
+    };
+  }
+
   private async refreshConversationMemory(conversationId: string): Promise<void> {
     const messages = await this.prisma.aiMessage.findMany({
       where: { conversationId },
@@ -1165,7 +1264,7 @@ async function requestAiWorkspaceRewrite(input: {
   }>;
   selectedFilePath?: string;
   selectedText?: string;
-}): Promise<{ summary: string; changes: GeneratedWorkspaceChanges; usage?: { inputTokens: number; outputTokens: number; totalTokens: number } }> {
+}): Promise<{ summary: string; changes: GeneratedWorkspaceChanges; usage?: TokenUsage }> {
   const contextFiles = buildAiContextFiles(input.files, input.config);
   const contextChars = contextFiles.reduce((sum, file) => sum + file.content.length, 0);
   const effectiveMaxTokens = input.config.maxTokens;
@@ -1247,11 +1346,11 @@ async function requestAiArtifact(input: {
     status: string;
     contentJson: Prisma.JsonValue;
   }>;
-}): Promise<{ contentJson: Prisma.InputJsonValue; usage?: { inputTokens: number; outputTokens: number; totalTokens: number } }> {
+}): Promise<{ contentJson: Prisma.InputJsonValue; usage?: TokenUsage; playbookUsage?: TokenUsage }> {
   const contextFiles = buildAiContextFiles(input.files, input.config);
   const contextChars = contextFiles.reduce((sum, file) => sum + file.content.length, 0);
   const effectiveMaxTokens = input.config.maxTokens;
-  const playbookContext = await buildArtifactPlaybookContext({
+  const playbook = await buildArtifactPlaybookContext({
     type: input.type,
     config: input.config,
     instruction: input.instruction,
@@ -1276,7 +1375,7 @@ async function requestAiArtifact(input: {
           content: artifact.contentJson
         })),
         currentFiles: contextFiles,
-        playbookContext
+        playbookContext: playbook.context
       })
     }
   ];
@@ -1301,7 +1400,7 @@ async function requestAiArtifact(input: {
   const parseStartedAt = Date.now();
   const parsed = parseJsonObject(raw, `${artifactLabel(input.type)} response`);
   console.log(`[timing][ai-artifact-parse] type=${input.type} ms=${Date.now() - parseStartedAt}`);
-  return { contentJson: parsed, usage: completion.usage };
+  return { contentJson: parsed, usage: completion.usage, playbookUsage: playbook.usage };
 }
 
 async function buildArtifactPlaybookContext(input: {
@@ -1315,9 +1414,9 @@ async function buildArtifactPlaybookContext(input: {
     status: string;
     contentJson: Prisma.JsonValue;
   }>;
-}): Promise<string> {
+}): Promise<{ context: string; usage?: TokenUsage }> {
   if (input.type === "brief") {
-    return "No playbook context needed for brief clarification.";
+    return { context: "No playbook context needed for brief clarification." };
   }
 
   const query = buildArtifactPlaybookQuery({
@@ -1328,14 +1427,14 @@ async function buildArtifactPlaybookContext(input: {
   });
 
   if (input.type !== "visual_direction") {
-    return renderPlaybookContext(selectPlaybookEntries(query));
+    return { context: renderPlaybookContext(selectPlaybookEntries(query)) };
   }
 
   const selection = selectPlaybookEntriesWithAlternates(query, 36);
   const candidatePool = selection.alternates
     .filter((entry) => entry.category === "style-direction" || entry.category === "example")
     .slice(0, 30);
-  const extraIds = await requestAdditionalVisualPlaybookIds({
+  const extraSelection = await requestAdditionalVisualPlaybookIds({
     config: input.config,
     instruction: input.instruction,
     conversationSummary: input.conversationSummary,
@@ -1344,18 +1443,21 @@ async function buildArtifactPlaybookContext(input: {
     candidates: candidatePool
   });
   const candidateIds = new Set(candidatePool.map((entry) => entry.id));
-  const extraEntries = getPlaybookEntriesByIds(extraIds.filter((id) => candidateIds.has(id))).slice(0, 3);
+  const extraEntries = getPlaybookEntriesByIds(extraSelection.selectedIds.filter((id) => candidateIds.has(id))).slice(0, 3);
   const finalEntries = mergePlaybookEntries(selection.selected, extraEntries);
   const extraNote = extraEntries.length
     ? `Model requested additional playbook entries: ${extraEntries.map((entry) => entry.id).join(", ")}.`
     : "Model did not request additional playbook entries; backend-selected entries were considered sufficient.";
 
-  return `${renderPlaybookContext(finalEntries)}
+  return {
+    context: `${renderPlaybookContext(finalEntries)}
 
 ## Playbook Retrieval Metadata
 Backend-selected entries: ${selection.selected.map((entry) => entry.id).join(", ")}
 ${extraNote}
-Candidate policy: backend retrieval provides high-confidence matches first; the model may add up to three alternate style/example entries only when they materially improve the visual direction.`;
+Candidate policy: backend retrieval provides high-confidence matches first; the model may add up to three alternate style/example entries only when they materially improve the visual direction.`,
+    usage: extraSelection.usage
+  };
 }
 
 function buildArtifactPlaybookQuery(input: {
@@ -1393,8 +1495,8 @@ async function requestAdditionalVisualPlaybookIds(input: {
   selected: PlaybookEntry[];
   candidates: PlaybookEntry[];
   conversationSummary?: string;
-}): Promise<string[]> {
-  if (!input.candidates.length) return [];
+}): Promise<{ selectedIds: string[]; usage?: TokenUsage }> {
+  if (!input.candidates.length) return { selectedIds: [] };
 
   try {
     const completion = await requestProviderText({
@@ -1438,10 +1540,10 @@ Return only valid JSON. Do not include markdown fences.`,
     const parsed = parseJsonObject(completion.content, "Playbook curator response") as Record<string, unknown>;
     const ids = stringArrayField(parsed.selectedIds).slice(0, 3);
     console.log(`[ai-playbook-curator] selected_extra_ids=${ids.join(",") || "none"}`);
-    return ids;
+    return { selectedIds: ids, usage: completion.usage };
   } catch (error) {
     console.warn(`[ai-playbook-curator] skipped optional expansion: ${error instanceof Error ? error.message : String(error)}`);
-    return [];
+    return { selectedIds: [] };
   }
 }
 
@@ -1472,7 +1574,7 @@ async function requestAiSlideFragment(input: {
     contentJson: Prisma.JsonValue;
   }>;
   conversationSummary?: string;
-}): Promise<{ slideHtml: string }> {
+}): Promise<{ slideHtml: string; usage?: TokenUsage }> {
   const playbookEntries = selectPlaybookEntries({
     deckArchetype: input.plan.brief.objective,
     analysisOperator: input.slide.analysisOperator,
@@ -1553,7 +1655,7 @@ async function requestAiSlideFragment(input: {
   if (!slideHtml.trim()) {
     throw new Error(`Slide ${input.slide.id} response did not include slideHtml`);
   }
-  return { slideHtml };
+  return { slideHtml, usage: completion.usage };
 }
 
 function buildSlideFragmentSystemPrompt(): string {
@@ -1596,7 +1698,7 @@ async function requestProviderText(input: {
   responseFormat?: "json_object";
   logLabel: string;
   requestDetails: string;
-}): Promise<{ content: string; finishReason?: string | null; usage?: { inputTokens: number; outputTokens: number; totalTokens: number } }> {
+}): Promise<{ content: string; finishReason?: string | null; usage?: TokenUsage }> {
   console.log("========== AI PROMPT DUMP ==========");
   console.log(`[Target] Provider: ${input.config.provider}, Model: ${input.config.model}`);
   console.log(`[System Prompt]\n${input.systemPrompt}\n`);
@@ -1620,7 +1722,7 @@ async function requestOpenAiCompatibleText(input: {
   responseFormat?: "json_object";
   logLabel: string;
   requestDetails: string;
-}): Promise<{ content: string; finishReason?: string | null; usage?: { inputTokens: number; outputTokens: number; totalTokens: number } }> {
+}): Promise<{ content: string; finishReason?: string | null; usage?: TokenUsage }> {
   const payload: Record<string, unknown> = {
     model: input.config.model,
     messages: [
@@ -1686,7 +1788,7 @@ async function requestAnthropicText(input: {
   temperature: number;
   logLabel: string;
   requestDetails: string;
-}): Promise<{ content: string; finishReason?: string | null; usage?: { inputTokens: number; outputTokens: number; totalTokens: number } }> {
+}): Promise<{ content: string; finishReason?: string | null; usage?: TokenUsage }> {
   const payload: Record<string, unknown> = {
     model: input.config.model,
     system: input.systemPrompt,
@@ -2360,6 +2462,7 @@ type AiProviderConfig = {
   apiKey: string;
   baseUrl: string;
   model: string;
+  isCustom: boolean;
   maxInputTokens: number;
   maxContextChars: number;
   maxTokens: number;
@@ -2379,7 +2482,78 @@ const MODEL_LIMITS = {
   openaiFallback: { inputTokens: 128_000, outputTokens: 16_384 }
 } as const;
 
+const CREDITS_PER_USD = 1000;
+const MILLI_CREDITS_PER_CREDIT = 1000;
+const OFFICIAL_MODEL_MARKUP = 1.5;
+
+type OfficialModelPricing = {
+  inputUsdPerMillion: number;
+  outputUsdPerMillion: number;
+};
+
 const APPROX_CHARS_PER_TOKEN = 4;
+
+function officialModelPricing(config: AiProviderConfig): OfficialModelPricing | undefined {
+  const model = config.model.toLowerCase();
+  if (config.provider === "deepseek" && model.includes("deepseek-v4-pro")) {
+    return {
+      // DeepSeek v4-pro current cache-miss promotional rate, observed 2026-05-10.
+      inputUsdPerMillion: 0.435,
+      outputUsdPerMillion: 0.87
+    };
+  }
+  if (config.provider === "gemini" && model.includes("gemini-3.1-flash-lite")) {
+    return {
+      inputUsdPerMillion: 0.25,
+      outputUsdPerMillion: 1.5
+    };
+  }
+  if (config.provider === "anthropic" && model.includes("opus")) {
+    return {
+      inputUsdPerMillion: 5,
+      outputUsdPerMillion: 25
+    };
+  }
+  if (config.provider === "anthropic" && model.includes("sonnet")) {
+    return {
+      inputUsdPerMillion: 3,
+      outputUsdPerMillion: 15
+    };
+  }
+  return undefined;
+}
+
+function calculateCreditsMilli(usage: TokenUsage, pricing: OfficialModelPricing): number {
+  const inputUsd = (usage.inputTokens * pricing.inputUsdPerMillion) / 1_000_000;
+  const outputUsd = (usage.outputTokens * pricing.outputUsdPerMillion) / 1_000_000;
+  return Math.ceil((inputUsd + outputUsd) * CREDITS_PER_USD * OFFICIAL_MODEL_MARKUP * MILLI_CREDITS_PER_CREDIT);
+}
+
+function formatCredits(creditsMilli: number): string {
+  return (creditsMilli / MILLI_CREDITS_PER_CREDIT).toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3
+  });
+}
+
+function summarizeCreditCharges(charges: CreditCharge[]): CreditCharge | undefined {
+  if (!charges.length) return undefined;
+  const last = charges[charges.length - 1];
+  const inputTokens = charges.reduce((sum, charge) => sum + charge.inputTokens, 0);
+  const outputTokens = charges.reduce((sum, charge) => sum + charge.outputTokens, 0);
+  const creditsMilli = charges.reduce((sum, charge) => sum + charge.creditsMilli, 0);
+  return {
+    label: "deck-generation",
+    provider: last.provider,
+    model: last.model,
+    inputTokens,
+    outputTokens,
+    creditsMilli,
+    credits: creditsMilli / MILLI_CREDITS_PER_CREDIT,
+    remainingCreditsMilli: last.remainingCreditsMilli,
+    remainingCredits: last.remainingCredits
+  };
+}
 
 function resolveAiConfig(providerOverride?: string, customProvider?: unknown): AiProviderConfig {
   const customConfig = resolveCustomAiConfig(providerOverride, customProvider);
@@ -2402,6 +2576,7 @@ function resolveAiConfig(providerOverride?: string, customProvider?: unknown): A
       apiKey: process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || "",
       baseUrl: normalizeBaseUrl(process.env.DEEPSEEK_BASE_URL || process.env.AI_BASE_URL || "https://api.deepseek.com"),
       model: process.env.DEEPSEEK_MODEL || process.env.AI_MODEL || "deepseek-v4-pro",
+      isCustom: false,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
       maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.DEEPSEEK_MAX_TOKENS)
@@ -2417,6 +2592,7 @@ function resolveAiConfig(providerOverride?: string, customProvider?: unknown): A
         process.env.GEMINI_BASE_URL || process.env.AI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta/openai"
       ),
       model: process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-3.1-flash-lite",
+      isCustom: false,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
       maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.GEMINI_MAX_TOKENS)
@@ -2431,6 +2607,7 @@ function resolveAiConfig(providerOverride?: string, customProvider?: unknown): A
       apiKey: process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY || "",
       baseUrl: normalizeBaseUrl(process.env.ANTHROPIC_BASE_URL || process.env.CLAUDE_BASE_URL || process.env.AI_BASE_URL || "https://api.anthropic.com/v1"),
       model,
+      isCustom: false,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
       maxTokens: resolveMaxOutputTokens(limits.outputTokens, resolveAnthropicMaxTokensEnv(resolvedProvider.anthropicModelFamily)),
@@ -2446,6 +2623,7 @@ function resolveAiConfig(providerOverride?: string, customProvider?: unknown): A
     apiKey: process.env.OPENAI_API_KEY || "",
     baseUrl: normalizeBaseUrl(process.env.OPENAI_BASE_URL || process.env.AI_BASE_URL || "https://api.openai.com/v1"),
     model: process.env.OPENAI_MODEL || process.env.AI_MODEL || "gpt-4.1-mini",
+    isCustom: false,
     maxInputTokens: limits.inputTokens,
     maxContextChars: tokensToApproxChars(limits.inputTokens),
     maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.OPENAI_MAX_TOKENS)
@@ -2605,6 +2783,7 @@ function resolveCustomAiConfig(providerOverride: string | undefined, customProvi
       apiKey,
       baseUrl: normalizeBaseUrl(customBaseUrl || "https://api.deepseek.com"),
       model: customModel || "deepseek-v4-pro",
+      isCustom: true,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
       maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.DEEPSEEK_MAX_TOKENS)
@@ -2618,6 +2797,7 @@ function resolveCustomAiConfig(providerOverride: string | undefined, customProvi
       apiKey,
       baseUrl: normalizeBaseUrl(customBaseUrl || "https://generativelanguage.googleapis.com/v1beta/openai"),
       model: customModel || "gemini-3.1-flash-lite",
+      isCustom: true,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
       maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.GEMINI_MAX_TOKENS)
@@ -2632,6 +2812,7 @@ function resolveCustomAiConfig(providerOverride: string | undefined, customProvi
       apiKey,
       baseUrl: normalizeBaseUrl(customBaseUrl || "https://api.anthropic.com/v1"),
       model,
+      isCustom: true,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
       maxTokens: resolveMaxOutputTokens(limits.outputTokens, resolveAnthropicMaxTokensEnv(modelFamily)),
@@ -2647,6 +2828,7 @@ function resolveCustomAiConfig(providerOverride: string | undefined, customProvi
     apiKey,
     baseUrl: normalizeBaseUrl(customBaseUrl || "https://api.openai.com/v1"),
     model: customModel || "gpt-4.1-mini",
+    isCustom: true,
     maxInputTokens: limits.inputTokens,
     maxContextChars: tokensToApproxChars(limits.inputTokens),
     maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.OPENAI_MAX_TOKENS)

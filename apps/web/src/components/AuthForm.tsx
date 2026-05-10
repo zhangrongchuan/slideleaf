@@ -49,10 +49,10 @@ export function AuthForm({ mode }: AuthFormProps) {
             <div className="mt-16 max-w-md">
               <p className="text-sm font-medium uppercase tracking-[0.22em] text-blue-200">AI-native HTML Slide Studio</p>
               <h1 className="mt-4 text-4xl font-semibold leading-[1.05] tracking-[-0.03em]">
-                Controlled generation for serious presentation work.
+                Plan, generate, and refine decks as source files.
               </h1>
               <p className="mt-5 text-sm leading-6 text-slate-300">
-                Clarify the brief, approve the plan, then let the agent generate editable HTML files inside a real workspace.
+                Use a staged workflow: brief, style, DeckPlan, editable HTML, then review before apply.
               </p>
             </div>
           </div>
@@ -87,7 +87,7 @@ export function AuthForm({ mode }: AuthFormProps) {
             <p className="mt-2 text-sm leading-6 text-slate-500">
               {mode === "login"
                 ? "Open your HTML slide workspaces."
-                : "Start building controlled AI-generated decks."}
+                : "Create a workspace for source-based slide generation."}
             </p>
           </div>
 
@@ -103,7 +103,7 @@ export function AuthForm({ mode }: AuthFormProps) {
 
         <div className="mb-5 flex items-center gap-3 text-xs text-slate-400">
           <span className="h-px flex-1 bg-slate-200" />
-          <span>Email login</span>
+          <span>or use email</span>
           <span className="h-px flex-1 bg-slate-200" />
         </div>
 
@@ -150,18 +150,18 @@ export function AuthForm({ mode }: AuthFormProps) {
           disabled={loading}
           className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(15,23,42,0.18)] transition hover:bg-slate-800 disabled:opacity-60"
         >
-          {loading ? "Working..." : mode === "login" ? "Sign in" : "Register"}
+          {loading ? "Working..." : mode === "login" ? "Sign in" : "Create account"}
           {!loading ? <ArrowRight size={16} /> : null}
         </button>
 
         <p className="mt-4 text-center text-sm text-slate-600">
           {mode === "login" ? (
             <a className="font-medium text-blue-700 hover:text-blue-800" href="/register">
-              Need an account?
+              Create an account
             </a>
           ) : (
             <a className="font-medium text-blue-700 hover:text-blue-800" href="/login">
-              Already registered?
+              Sign in instead
             </a>
           )}
         </p>

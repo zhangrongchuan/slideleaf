@@ -44,6 +44,12 @@ export class ProjectsController {
     return this.projects.remove(user.id, projectId);
   }
 
+  @Post(":projectId/leave")
+  async leave(@Req() request: Request, @Param("projectId") projectId: string) {
+    const user = await this.auth.requireUser(request);
+    return this.projects.leave(user.id, projectId);
+  }
+
   @Get(":projectId/members")
   async members(@Req() request: Request, @Param("projectId") projectId: string) {
     const user = await this.auth.requireUser(request);

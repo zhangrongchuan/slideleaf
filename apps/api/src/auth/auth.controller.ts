@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Post, Query, Req, Res } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Patch, Post, Query, Req, Res } from "@nestjs/common";
 import { randomBytes } from "node:crypto";
 import type { Request, Response } from "express";
 import { AuthService } from "./auth.service.js";
@@ -84,6 +84,17 @@ export class AuthController {
   @Get("me")
   async me(@Req() request: Request) {
     return { user: await this.auth.me(request) };
+  }
+
+  @Patch("me")
+  async updateMe(
+    @Req() request: Request,
+    @Body() body: { email?: string; name?: string | null },
+    @Res({ passthrough: true }) response: Response
+  ) {
+    const user = await this.auth.updateProfile(request, body);
+    this.auth.setSessionCookie(response, user);
+    return { user };
   }
 }
 

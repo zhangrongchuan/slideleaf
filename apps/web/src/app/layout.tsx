@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "SlideLeaf",
-  description: "HTML-first collaborative slide workspace",
+  description: "AI workspace for source-based HTML presentations",
   icons: {
     icon: "/logo.png",
     shortcut: "/logo.png",

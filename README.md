@@ -15,7 +15,7 @@ Most AI presentation tools optimize for fast first drafts. SlideLeaf is built fo
 - Template-style intelligence: the playbook includes adapted style metadata from 32 MIT-licensed beautiful-html-templates directions, used for tone-first visual direction selection.
 - Review before apply: AI proposes workspace file patches; users decide what lands.
 - Portable rendering: compiled decks become static HTML with local theme and runtime files.
-- Provider flexible: Claude, Gemini, DeepSeek, and OpenAI-compatible providers are supported.
+- Provider flexible: official DeepSeek/Gemini routing plus browser-local own keys for DeepSeek, Gemini, and Claude.
 
 ## Product Workflow
 
@@ -211,9 +211,31 @@ DEEPSEEK_API_KEY="your-deepseek-api-key"
 DEEPSEEK_MODEL="deepseek-v4-pro"
 ```
 
-The UI currently exposes DeepSeek V4 Pro, Gemini 3.1 Flash Lite, Claude Sonnet 4.6, and Claude Opus 4.7. SlideLeaf's playbook layer is provider independent: the backend retrieves the relevant Markdown entries and injects them into the request context.
+The UI currently exposes DeepSeek V4 Pro and Gemini 3.1 Flash Lite as official server models. Claude Sonnet 4.6 and Claude Opus 4.7 remain configured in the backend pricing/model table but are hidden from the official picker until they are ready to open.
 
 Users can also add own API keys from the dashboard Settings panel. These own-model credentials are stored only in the browser's local storage and are sent to the API only for the selected request; they are not written to the SlideLeaf database. Clearing browser cache or site data removes them.
+
+## Credits
+
+SlideLeaf uses credits for official server model calls:
+
+- `1 USD = 1000 credits`.
+- Official model usage is billed at the direct API token price converted to credits, then multiplied by `1.5`.
+- Own API keys configured in Settings do not consume SlideLeaf credits.
+- Balances are stored as `creditsMilli`, where `1000 creditsMilli = 1 credit`, so fractional charges stay precise.
+
+Current official pricing table:
+
+| Model | Input credits / 1M tokens | Output credits / 1M tokens | UI status |
+| --- | ---: | ---: | --- |
+| DeepSeek V4 Pro | 652.5 | 1305 | Official picker |
+| Gemini 3.1 Flash Lite | 375 | 2250 | Official picker |
+| Claude Sonnet 4.6 | 4500 | 22500 | Backend ready, hidden |
+| Claude Opus 4.7 | 7500 | 37500 | Backend ready, hidden |
+
+DeepSeek V4 Pro uses the current cache-miss promotional rate captured on 2026-05-10; update the pricing constants when provider pricing changes.
+
+Set `STARTING_CREDITS` in `.env` if new accounts should receive an initial balance during development or a private beta.
 
 ## Useful Commands
 
@@ -237,9 +259,9 @@ pnpm --filter @slideleaf/renderer test
 
 - Cookie-based register, login, logout, and Google OAuth hooks.
 - Project dashboard with template project creation.
-- Overleaf-style workspace with file tree, editor, preview, compile log, asset upload, and member roles.
+- Overleaf-style workspace with file tree, editor, preview, compile log, and member roles.
 - Text file create, update, rename, and delete APIs.
-- Direct image upload into `assets/` for PNG, JPEG, GIF, and WebP.
+- Asset upload UI is reserved for the future document/image ingestion workflow.
 - BullMQ compile queue and worker-based rendering.
 - MinIO-backed static deck upload and `/share/:shareSlug` rendering.
 - AI workspace generation with review, apply, and reject flow.

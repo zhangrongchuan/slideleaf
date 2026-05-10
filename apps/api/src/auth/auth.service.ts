@@ -18,6 +18,8 @@ export type RequestUser = {
   id: string;
   email: string;
   name: string | null;
+  credits: number;
+  creditsMilli: number;
 };
 
 export type GoogleProfile = {
@@ -48,7 +50,8 @@ export class AuthService {
       data: {
         email,
         name: input.name?.trim() || null,
-        password: await bcrypt.hash(password, 12)
+        password: await bcrypt.hash(password, 12),
+        creditsMilli: startingCreditsMilli()
       }
     });
 
@@ -80,7 +83,8 @@ export class AuthService {
       data: {
         email,
         name: profile.name?.trim() || null,
-        password: await bcrypt.hash(`google:${randomUUID()}`, 12)
+        password: await bcrypt.hash(`google:${randomUUID()}`, 12),
+        creditsMilli: startingCreditsMilli()
       }
     });
 
@@ -89,6 +93,29 @@ export class AuthService {
 
   async me(request: Request): Promise<RequestUser> {
     return this.requireUser(request);
+  }
+
+  async updateProfile(
+    request: Request,
+    input: { email?: string; name?: string | null }
+  ): Promise<RequestUser> {
+    const currentUser = await this.requireUser(request);
+    const email = normalizeEmail(input.email ?? currentUser.email);
+    const name = typeof input.name === "string" ? input.name.trim() || null : null;
+
+    if (email !== currentUser.email) {
+      const existing = await this.prisma.user.findUnique({ where: { email } });
+      if (existing && existing.id !== currentUser.id) {
+        throw new BadRequestException("Email is already registered");
+      }
+    }
+
+    const user = await this.prisma.user.update({
+      where: { id: currentUser.id },
+      data: { email, name }
+    });
+
+    return toRequestUser(user);
   }
 
   async requireUser(request: Request): Promise<RequestUser> {
@@ -173,10 +200,18 @@ function secureCookie(): boolean {
   return process.env.NODE_ENV === "production" || sameSitePolicy() === "none";
 }
 
-function toRequestUser(user: { id: string; email: string; name: string | null }): RequestUser {
+function toRequestUser(user: { id: string; email: string; name: string | null; creditsMilli?: number | null }): RequestUser {
+  const creditsMilli = Math.max(0, user.creditsMilli ?? 0);
   return {
     id: user.id,
     email: user.email,
-    name: user.name
+    name: user.name,
+    credits: creditsMilli / 1000,
+    creditsMilli
   };
+}
+
+function startingCreditsMilli(): number {
+  const parsed = Number.parseFloat(process.env.STARTING_CREDITS ?? "0");
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 1000) : 0;
 }

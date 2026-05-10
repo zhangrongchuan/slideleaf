@@ -120,6 +120,25 @@ export class ProjectsService {
     return { ok: true };
   }
 
+  async leave(userId: string, projectId: string) {
+    const project = await this.assertAccess(userId, projectId, "viewer");
+    if (project.ownerId === userId) {
+      throw new BadRequestException("Project creator cannot leave the project");
+    }
+
+    const member = await this.prisma.projectMember.findFirst({
+      where: { projectId, userId }
+    });
+    if (!member) throw new NotFoundException("Project membership not found");
+
+    if (normalizeRole(member.role) === "owner") {
+      await this.assertAnotherOwner(projectId, userId);
+    }
+
+    await this.prisma.projectMember.delete({ where: { id: member.id } });
+    return { ok: true };
+  }
+
   async listMembers(userId: string, projectId: string) {
     await this.assertAccess(userId, projectId, "viewer");
     const members = await this.prisma.projectMember.findMany({

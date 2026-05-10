@@ -5,7 +5,7 @@ import { BrandMark } from "../components/BrandMark";
 const codeLines = [
   "<section class=\"slide hero active\">",
   "  <h1>AI-native HTML Slide Studio</h1>",
-  "  <p>Brief, plan, generate, edit.</p>",
+  "  <p>Brief, plan, compile, refine.</p>",
   "</section>",
   "",
   ".slide {",
@@ -15,7 +15,7 @@ const codeLines = [
   "}"
 ];
 
-const deckSteps = ["Clarify", "Plan", "Generate", "Compile"];
+const deckSteps = ["Clarify", "Style", "Plan", "Compile"];
 
 export default function HomePage() {
   return (
@@ -28,7 +28,7 @@ export default function HomePage() {
               <span />
               <span />
               <span />
-              <strong>slides/deck.html</strong>
+              <strong>slides/01-title.html</strong>
             </div>
             <div className="space-y-2 p-5 font-mono text-[12px] leading-5 text-slate-300">
               {codeLines.map((line, index) => (
@@ -59,7 +59,7 @@ export default function HomePage() {
           <div className="scene-chat">
             <div className="chat-prompt">
               <Sparkles size={16} />
-              <span>Generate a premium investor deck about AI agents</span>
+              <span>Generate a polished open-source project deck</span>
             </div>
             <div className="chat-progress">
               {deckSteps.map((step, index) => (
@@ -82,7 +82,7 @@ export default function HomePage() {
               Log in
             </Link>
             <Link
-              href="/dashboard"
+              href="/login"
               className="inline-flex h-10 items-center gap-2 rounded-lg bg-white px-4 text-sm font-semibold text-slate-950 shadow-[0_18px_44px_rgba(255,255,255,0.18)] transition hover:bg-slate-100"
             >
               Get started
@@ -101,7 +101,7 @@ export default function HomePage() {
               SlideLeaf
             </h1>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-300">
-              A professional workspace where AI clarifies your story, plans the deck, writes editable HTML, and compiles it into a shareable presentation.
+              A professional workspace where AI clarifies the brief, explores visual direction, plans the deck, and generates editable HTML slide files.
             </p>
 
             <div className="mt-8 max-w-2xl rounded-2xl border border-white/14 bg-[#0d1728]/88 p-2 shadow-[0_28px_90px_rgba(0,0,0,0.40)] backdrop-blur-xl">
@@ -115,7 +115,7 @@ export default function HomePage() {
                   </span>
                 </div>
                 <Link
-                  href="/dashboard"
+                  href="/login"
                   className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-blue-500 px-4 text-sm font-semibold text-white shadow-[0_16px_36px_rgba(59,130,246,0.32)] transition hover:bg-blue-400"
                 >
                   <Play size={16} />
@@ -130,7 +130,7 @@ export default function HomePage() {
             <div className="absolute right-0 top-0 h-[520px] w-[72%] rounded-2xl border border-white/12 bg-white/[0.06] shadow-[0_40px_100px_rgba(0,0,0,0.50)] backdrop-blur-xl" />
             <div className="absolute right-8 top-10 h-[420px] w-[64%] rounded-xl border border-white/14 bg-[#07111f] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.45)]">
               <div className="mb-4 flex items-center justify-between text-xs text-slate-400">
-                <span>Live visualization</span>
+                <span>Live preview</span>
                 <span>compiled</span>
               </div>
               <div className="grid h-[340px] place-items-center rounded-lg border border-white/10 bg-[#0b1b31] p-8">
@@ -156,9 +156,9 @@ export default function HomePage() {
       <section className="relative z-10 border-t border-white/10 bg-[#0b1423] px-6 py-10">
         <div className="mx-auto grid max-w-7xl gap-4 md:grid-cols-3">
           {[
-            ["Consultation first", "The assistant asks for audience, tone, purpose, constraints, and missing inputs before generating."],
-            ["Plan before code", "Deck logic becomes structured slide plans, action titles, layouts, and content blocks."],
-            ["HTML output", "The final result is editable source files plus a compiled static presentation preview."]
+            ["Clarify first", "Capture audience, purpose, tone, constraints, and missing inputs before generation starts."],
+            ["DeckPlan before HTML", "Turn the story into action titles, slide roles, evidence needs, and visual plans."],
+            ["Source files, not screenshots", "Generate modular HTML/CSS files that compile into a portable static presentation."]
           ].map(([title, body]) => (
             <article key={title} className="rounded-xl border border-white/10 bg-white/[0.04] p-5">
               <h2 className="text-base font-semibold text-white">{title}</h2>
@@ -170,7 +170,7 @@ export default function HomePage() {
 
       {/* Footer Section */}
       <footer className="border-t border-white/10 bg-[#08111f] py-12 px-6 text-sm text-slate-400">
-        <div className="mx-auto max-w-7xl grid gap-8 md:grid-cols-4">
+        <div className="mx-auto max-w-7xl grid gap-8 md:grid-cols-[minmax(0,1.4fr)_repeat(3,minmax(0,1fr))]">
           <div>
             <div className="flex items-center gap-2 mb-4">
               <BrandMark
@@ -180,43 +180,41 @@ export default function HomePage() {
               />
             </div>
             <p className="max-w-[200px] text-xs leading-5">
-              The AI-native HTML slide studio. Build beautiful presentations with the power of code and language models.
+              Open-source AI workspace for planning, generating, and compiling HTML presentations as editable source files.
             </p>
           </div>
           
           <div>
             <h3 className="font-semibold text-white mb-4">Product</h3>
-            <ul className="space-y-3 hidden-links">
-              <li><Link href="/dashboard" className="hover:text-white transition">Workspace</Link></li>
-              <li><Link href="/" className="hover:text-white transition">Features</Link></li>
-              <li><Link href="/" className="hover:text-white transition">Templates</Link></li>
+            <ul className="space-y-3">
+              <li><Link href="/login" className="hover:text-white transition">Workspace</Link></li>
+              <li><Link href="/login" className="hover:text-white transition">DeckPlan workflow</Link></li>
+              <li><Link href="/login" className="hover:text-white transition">HTML deck compiler</Link></li>
             </ul>
           </div>
           
           <div>
-            <h3 className="font-semibold text-white mb-4">About</h3>
+            <h3 className="font-semibold text-white mb-4">Open Source</h3>
             <ul className="space-y-3">
-              <li><Link href="/" className="hover:text-white transition">Company</Link></li>
-              <li><Link href="/" className="hover:text-white transition">Blog</Link></li>
-              <li><Link href="/" className="hover:text-white transition">Careers</Link></li>
+              <li><a href="https://github.com/zhangrongchuan/slideleaf" className="hover:text-white transition" target="_blank" rel="noreferrer">GitHub</a></li>
+              <li><a href="https://github.com/zhangrongchuan/slideleaf#readme" className="hover:text-white transition" target="_blank" rel="noreferrer">README</a></li>
+              <li><a href="https://github.com/zhangrongchuan/slideleaf/issues" className="hover:text-white transition" target="_blank" rel="noreferrer">Issues</a></li>
             </ul>
           </div>
 
           <div>
-            <h3 className="font-semibold text-white mb-4">Legal</h3>
+            <h3 className="font-semibold text-white mb-4">Get Started</h3>
             <ul className="space-y-3">
-              <li><Link href="/" className="hover:text-white transition">Privacy Policy</Link></li>
-              <li><Link href="/" className="hover:text-white transition">Terms of Service</Link></li>
-              <li><Link href="/" className="hover:text-white transition">Cookie Policy</Link></li>
+              <li><Link href="/login" className="hover:text-white transition">Log in</Link></li>
+              <li><Link href="/login" className="hover:text-white transition">Create workspace</Link></li>
+              <li><Link href="/login" className="hover:text-white transition">Configure own model</Link></li>
             </ul>
           </div>
         </div>
         <div className="mx-auto max-w-7xl mt-12 pt-8 border-t border-white/10 flex flex-col items-center justify-between gap-4 sm:flex-row text-xs">
-          <p>&copy; {new Date().getFullYear()} SlideLeaf. All rights reserved.</p>
+          <p>&copy; {new Date().getFullYear()} SlideLeaf. Open-source HTML slide studio.</p>
           <div className="flex gap-4">
-            <Link href="/" className="hover:text-white transition">Twitter</Link>
-            <Link href="/" className="hover:text-white transition">GitHub</Link>
-            <Link href="/" className="hover:text-white transition">Discord</Link>
+            <a href="https://github.com/zhangrongchuan/slideleaf" className="hover:text-white transition" target="_blank" rel="noreferrer">GitHub</a>
           </div>
         </div>
       </footer>
