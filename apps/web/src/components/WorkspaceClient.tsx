@@ -1437,6 +1437,19 @@ function AssistantPane({
   const activeWorkflowRun = workflowRun ?? workflowRunFromArtifact(runningArtifact);
   const generationRun = latestGenerationRun(artifacts);
   const visiblePendingEntries = pendingEntries.filter((entry) => !isPendingEntrySaved(entry, messages));
+  const stageArtifactType = artifactTypeForStage(conversation?.stage ?? "consultation");
+  const currentStageArtifact = stageArtifactType ? latestArtifactForType(artifacts, stageArtifactType) : null;
+  const deferredBillingMessages = messages.filter((message) =>
+    shouldDeferMessageBilling(message, {
+      task,
+      generationRun,
+      currentStageArtifact
+    })
+  );
+  const deferredBillingMessageIds = new Set(deferredBillingMessages.map((message) => message.id));
+  const generationRunBeforeChat = Boolean(
+    generationRun && (visiblePendingEntries.length > 0 || messages.some((message) => isMessageAfterArtifact(message, generationRun)))
+  );
   const showTaskRunningBubble =
     task?.status === "running" &&
     !activeWorkflowRun &&
@@ -1456,7 +1469,7 @@ function AssistantPane({
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-  }, [messages.length, lastPrompt, visiblePendingEntries.length, activeWorkflowRun?.label, task?.status, error]);
+  }, [messages.length, lastPrompt, visiblePendingEntries.length, activeWorkflowRun?.label, task?.status, error, generationRun?.updatedAt]);
 
   return (
     <section className="grid h-[calc(100%-44px)] grid-rows-[46px_minmax(0,1fr)_auto] bg-[#f4f7fb]">
@@ -1475,37 +1488,20 @@ function AssistantPane({
 
       <div className="min-h-0 overflow-auto px-3 py-4">
         <div className="mx-auto flex min-w-0 max-w-4xl flex-col gap-4">
-          {!messages.length && !lastPrompt && !workflowRun ? <AssistantWelcome /> : null}
+          {!messages.length && !lastPrompt && !workflowRun && !generationRun ? <AssistantWelcome /> : null}
+
+          {generationRunBeforeChat && generationRun ? (
+            <GenerationRunCard artifact={generationRun} />
+          ) : null}
 
           {messages.map((message) => (
             <ChatBubble key={message.id} role={message.role === "user" ? "user" : "assistant"}>
-              <MessageContent message={message} />
+              <MessageContent message={message} showBilling={!deferredBillingMessageIds.has(message.id)} />
             </ChatBubble>
           ))}
 
-          {visiblePendingEntries.map((entry) => (
-            <div key={entry.id} className="contents">
-              <ChatBubble role="user">
-                <div className="max-w-[34rem] whitespace-pre-wrap text-sm leading-6">
-                  {entry.displayText || entry.prompt}
-                </div>
-              </ChatBubble>
-              <ChatBubble role="assistant">
-                {entry.status === "failed" ? (
-                  <div className="rounded-md bg-red-50 px-3 py-2 text-sm leading-6 text-red-700">
-                    {entry.error || entry.description}
-                  </div>
-                ) : (
-                  <RunningBubble title={entry.title} description={entry.description} />
-                )}
-              </ChatBubble>
-            </div>
-          ))}
-
-          {lastPrompt && !lastPromptAlreadySaved && !lastPromptAlreadyPending ? (
-            <ChatBubble role="user">
-              <div className="max-w-[34rem] whitespace-pre-wrap text-sm leading-6">{lastPrompt}</div>
-            </ChatBubble>
+          {!generationRunBeforeChat && generationRun ? (
+            <GenerationRunCard artifact={generationRun} />
           ) : null}
 
           {activeWorkflowRun && !visiblePendingEntries.length ? (
@@ -1538,10 +1534,6 @@ function AssistantPane({
             </ChatBubble>
           ) : null}
 
-          {generationRun ? (
-            <GenerationRunCard artifact={generationRun} />
-          ) : null}
-
           {error ? (
             <ChatBubble role="assistant">
               <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
@@ -1557,28 +1549,10 @@ function AssistantPane({
           {task?.status === "needs_review" ? (
             <ChatBubble role="assistant">
               <div className="space-y-3">
-                <div className="flex items-start justify-between gap-3">
+                <div>
                   <div>
                     <div className="text-sm font-semibold text-slate-950">Review generated patch</div>
                     {task.diffJson?.summary ? <div className="mt-1 text-sm text-slate-600">{task.diffJson.summary}</div> : null}
-                  </div>
-                  <div className="flex shrink-0 gap-2">
-                    <button
-                      onClick={onApply}
-                      disabled={!canEdit}
-                      className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-sm text-white disabled:opacity-40"
-                    >
-                      <Check size={15} />
-                      Apply
-                    </button>
-                    <button
-                      onClick={onReject}
-                      disabled={!canEdit}
-                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-40"
-                    >
-                      <X size={15} />
-                      Reject
-                    </button>
                   </div>
                 </div>
                 <div className="space-y-2">
@@ -1602,7 +1576,52 @@ function AssistantPane({
                     </details>
                   ))}
                 </div>
+                <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-3">
+                  <button
+                    onClick={onReject}
+                    disabled={!canEdit}
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-40"
+                  >
+                    <X size={15} />
+                    Reject
+                  </button>
+                  <button
+                    onClick={onApply}
+                    disabled={!canEdit}
+                    className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-sm text-white disabled:opacity-40"
+                  >
+                    <Check size={15} />
+                    Apply
+                  </button>
+                </div>
               </div>
+            </ChatBubble>
+          ) : null}
+
+          {deferredBillingMessages.length ? <MessageBillingFooters messages={deferredBillingMessages} /> : null}
+
+          {visiblePendingEntries.map((entry) => (
+            <div key={entry.id} className="contents">
+              <ChatBubble role="user">
+                <div className="max-w-[34rem] whitespace-pre-wrap text-sm leading-6">
+                  {entry.displayText || entry.prompt}
+                </div>
+              </ChatBubble>
+              <ChatBubble role="assistant">
+                {entry.status === "failed" ? (
+                  <div className="rounded-md bg-red-50 px-3 py-2 text-sm leading-6 text-red-700">
+                    {entry.error || entry.description}
+                  </div>
+                ) : (
+                  <RunningBubble title={entry.title} description={entry.description} />
+                )}
+              </ChatBubble>
+            </div>
+          ))}
+
+          {lastPrompt && !lastPromptAlreadySaved && !lastPromptAlreadyPending ? (
+            <ChatBubble role="user">
+              <div className="max-w-[34rem] whitespace-pre-wrap text-sm leading-6">{lastPrompt}</div>
             </ChatBubble>
           ) : null}
 
@@ -2941,36 +2960,197 @@ function ChatBubble({ role, children }: { role: "assistant" | "user"; children: 
   );
 }
 
-function MessageContent({ message }: { message: AiMessage }) {
+type MessageBillingCharge = {
+  label?: string;
+  credits?: number;
+  creditsMilli?: number;
+  remainingCredits?: number;
+  remainingCreditsMilli?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+};
+
+type MessageUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+};
+
+type MessageBillingNotice = {
+  text: string;
+  tone: "slate" | "amber";
+};
+
+function MessageContent({ message, showBilling = true }: { message: AiMessage; showBilling?: boolean }) {
   const rawStatus = typeof message.metadata?.status === "string" ? message.metadata.status : "";
   const status = rawStatus === "draft" || rawStatus === "approved" ? "" : rawStatus;
-
-  // Extract token usage
-  const usage = message.metadata?.usage as { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
-  const creditCharge = message.metadata?.creditCharge as { credits?: number; creditsMilli?: number; remainingCredits?: number } | undefined;
+  const billing = messageBillingDetails(message);
+  const showFooter = Boolean(status || (showBilling && hasBillingDetails(billing)));
 
   return (
     <div className="max-w-[34rem]">
       <div className="whitespace-pre-wrap text-sm leading-6">{message.content}</div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {status ? (
-          <div className="inline-flex rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-500">
-            {status.replace("_", " ")}
-          </div>
-        ) : null}
-        {usage && (usage.inputTokens || usage.outputTokens) ? (
-          <div className="inline-flex rounded-full bg-blue-50 px-2 py-1 text-[11px] text-blue-600 border border-blue-100 font-mono">
-            {usage.totalTokens || (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)} tk ({usage.inputTokens} in, {usage.outputTokens} out)
-          </div>
-        ) : null}
-        {creditCharge?.credits ? (
-          <div className="inline-flex rounded-full border border-amber-100 bg-amber-50 px-2 py-1 text-[11px] font-mono text-amber-700">
-            -{formatCreditsMilli(creditCharge.creditsMilli ?? creditCharge.credits)} credits
-          </div>
-        ) : null}
+      {showFooter ? (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {status ? (
+            <div className="inline-flex rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-500">
+              {status.replace("_", " ")}
+            </div>
+          ) : null}
+          {showBilling ? <MessageBillingChips details={billing} /> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MessageBillingFooters({ messages }: { messages: AiMessage[] }) {
+  const rows = messages.map((message) => ({ message, details: messageBillingDetails(message) })).filter((row) => hasBillingDetails(row.details));
+  if (!rows.length) return null;
+
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[34rem] rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-500 shadow-sm">
+        <div className="mb-1 font-semibold uppercase tracking-wide text-slate-400">Usage</div>
+        <div className="flex flex-wrap gap-2">
+          {rows.map((row) => (
+            <MessageBillingChips key={row.message.id} details={row.details} />
+          ))}
+        </div>
       </div>
     </div>
   );
+}
+
+function MessageBillingChips({ details }: { details: ReturnType<typeof messageBillingDetails> }) {
+  if (!hasBillingDetails(details)) return null;
+  return (
+    <>
+      {details.usage ? (
+        <div className="inline-flex rounded-full border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-[11px] text-blue-600">
+          {details.usage.totalTokens ?? (details.usage.inputTokens ?? 0) + (details.usage.outputTokens ?? 0)} tk ({details.usage.inputTokens ?? 0} in, {details.usage.outputTokens ?? 0} out)
+        </div>
+      ) : null}
+      {details.creditCharges.map((charge, index) => (
+        <div key={`${charge.label}-${index}`} className="inline-flex rounded-full border border-amber-100 bg-amber-50 px-2 py-1 font-mono text-[11px] text-amber-700">
+          {charge.label ? `${charge.label}: ` : ""}-{formatCreditsMilli(charge.creditsMilli ?? charge.credits)} credits
+        </div>
+      ))}
+      {details.notices.map((notice, index) => (
+        <div
+          key={`${notice.text}-${index}`}
+          className={`inline-flex rounded-full border px-2 py-1 text-[11px] ${
+            notice.tone === "amber"
+              ? "border-amber-100 bg-amber-50 text-amber-700"
+              : "border-slate-200 bg-slate-50 text-slate-500"
+          }`}
+        >
+          {notice.text}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function messageBillingDetails(message: AiMessage): {
+  usage?: MessageUsage;
+  creditCharges: MessageBillingCharge[];
+  notices: MessageBillingNotice[];
+} {
+  const metadata = message.metadata ?? {};
+  const usage = asUsage(metadata.usage);
+  const creditCharge = asBillingCharge(metadata.creditCharge, "model");
+  const playbookCreditCharge = asBillingCharge(metadata.playbookCreditCharge, "playbook");
+  const billing = asDeckGenerationBilling(metadata.billing);
+  const deckCharge = billing.charge;
+  const chargeUsage = usage ?? usageFromCharge(creditCharge) ?? usageFromCharge(deckCharge);
+  return {
+    usage: chargeUsage,
+    creditCharges: [playbookCreditCharge, creditCharge ?? deckCharge].filter(Boolean) as MessageBillingCharge[],
+    notices: billing.notice ? [billing.notice] : []
+  };
+}
+
+function hasBillingDetails(details: ReturnType<typeof messageBillingDetails>): boolean {
+  return Boolean(details.usage || details.creditCharges.length || details.notices.length);
+}
+
+function asUsage(value: unknown): MessageUsage | undefined {
+  const record = asRecord(value);
+  const inputTokens = numberField(record, "inputTokens");
+  const outputTokens = numberField(record, "outputTokens");
+  const totalTokens = numberField(record, "totalTokens");
+  if (!inputTokens && !outputTokens && !totalTokens) return undefined;
+  return { inputTokens, outputTokens, totalTokens };
+}
+
+function usageFromCharge(charge?: MessageBillingCharge): MessageUsage | undefined {
+  if (!charge?.inputTokens && !charge?.outputTokens && !charge?.totalTokens) return undefined;
+  return {
+    inputTokens: charge.inputTokens,
+    outputTokens: charge.outputTokens,
+    totalTokens: charge.totalTokens ?? (charge.inputTokens ?? 0) + (charge.outputTokens ?? 0)
+  };
+}
+
+function asBillingCharge(value: unknown, fallbackLabel: string): (MessageBillingCharge & { label?: string }) | undefined {
+  const record = asRecord(value);
+  const credits = numberField(record, "credits");
+  const creditsMilli = numberField(record, "creditsMilli");
+  if (!credits && !creditsMilli) return undefined;
+  return {
+    label: textField(record, "label") || fallbackLabel,
+    credits,
+    creditsMilli,
+    remainingCredits: numberField(record, "remainingCredits"),
+    remainingCreditsMilli: numberField(record, "remainingCreditsMilli"),
+    inputTokens: numberField(record, "inputTokens"),
+    outputTokens: numberField(record, "outputTokens"),
+    totalTokens: numberField(record, "totalTokens")
+  };
+}
+
+function asDeckGenerationBilling(value: unknown): { charge?: MessageBillingCharge; notice?: MessageBillingNotice } {
+  const record = asRecord(value);
+  if (!Object.keys(record).length) return {};
+  const charged = record.charged === true;
+  const provider = textField(record, "provider");
+  const source = textField(record, "source");
+  const creditsMilli = numberField(record, "creditsMilli");
+  const inputTokens = numberField(record, "inputTokens");
+  const outputTokens = numberField(record, "outputTokens");
+  const totalTokens = numberField(record, "totalTokens");
+
+  if (charged && creditsMilli) {
+    return {
+      charge: {
+        label: "deck-generation",
+        creditsMilli,
+        credits: creditsMilli,
+        remainingCreditsMilli: numberField(record, "remainingCreditsMilli"),
+        inputTokens,
+        outputTokens,
+        totalTokens
+      }
+    };
+  }
+
+  if (source === "custom") {
+    return {
+      notice: {
+        tone: "slate",
+        text: `${provider ? `${provider}: ` : ""}own model, no SlideLeaf credits charged`
+      }
+    };
+  }
+
+  return {
+    notice: {
+      tone: "amber",
+      text: `${provider ? `${provider}: ` : ""}usage unavailable, no credits calculated`
+    }
+  };
 }
 
 function ExamplePrompt({ text }: { text: string }) {
@@ -3402,6 +3582,30 @@ function isPendingEntrySaved(entry: PendingChatEntry, messages: AiMessage[]): bo
   });
 }
 
+function shouldDeferMessageBilling(
+  message: AiMessage,
+  context: {
+    task: AiTask | null;
+    generationRun: AiArtifact | null;
+    currentStageArtifact: AiArtifact | null;
+  }
+): boolean {
+  if (!hasBillingDetails(messageBillingDetails(message))) return false;
+  const metadata = asRecord(message.metadata);
+  const generationTaskId = textField(asRecord(context.generationRun?.contentJson), "taskId");
+  if (context.task?.id && message.aiTaskId === context.task.id) return true;
+  if (generationTaskId && message.aiTaskId === generationTaskId) return true;
+  if (context.generationRun?.id && textField(metadata, "runArtifactId") === context.generationRun.id) return true;
+  if (context.currentStageArtifact?.id && textField(metadata, "artifactId") === context.currentStageArtifact.id) return true;
+  return false;
+}
+
+function isMessageAfterArtifact(message: AiMessage, artifact: AiArtifact): boolean {
+  const messageTime = Date.parse(message.createdAt);
+  const artifactTime = Date.parse(artifact.updatedAt);
+  return Number.isFinite(messageTime) && Number.isFinite(artifactTime) && messageTime > artifactTime;
+}
+
 function messageClientRequestId(message: AiMessage): string {
   return textField(asRecord(message.metadata), "clientRequestId");
 }
@@ -3505,6 +3709,16 @@ function BooleanRecord(value: JsonRecord): value is JsonRecord {
 
 function textField(record: JsonRecord, key: string): string {
   return readableValue(record[key]);
+}
+
+function numberField(record: JsonRecord, key: string): number | undefined {
+  const value = record[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
 }
 
 function listField(record: JsonRecord, key: string): string[] {

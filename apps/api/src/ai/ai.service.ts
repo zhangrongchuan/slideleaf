@@ -747,6 +747,7 @@ export class AiService {
             runArtifactId,
             changedFiles: diff.files.map((file) => ({ path: file.path, action: file.action })),
             creditCharge: summarizeCreditCharges(creditCharges),
+            billing: deckGenerationBillingSummary(aiConfig, creditCharges),
             status: "needs_review"
           }
         }
@@ -2570,6 +2571,36 @@ function summarizeCreditCharges(charges: CreditCharge[]): CreditCharge | undefin
     credits: creditsMilli,
     remainingCreditsMilli: last.remainingCreditsMilli,
     remainingCredits: last.remainingCredits
+  };
+}
+
+function deckGenerationBillingSummary(config: AiProviderConfig, charges: CreditCharge[]): Prisma.InputJsonValue {
+  const summary = summarizeCreditCharges(charges);
+  if (summary) {
+    return {
+      charged: true,
+      source: config.isCustom ? "custom" : "official",
+      provider: config.provider,
+      model: config.model,
+      inputTokens: summary.inputTokens,
+      outputTokens: summary.outputTokens,
+      totalTokens: summary.inputTokens + summary.outputTokens,
+      creditsMilli: summary.creditsMilli,
+      remainingCreditsMilli: summary.remainingCreditsMilli,
+      slideCharges: charges.map((charge) => ({
+        label: charge.label,
+        inputTokens: charge.inputTokens,
+        outputTokens: charge.outputTokens,
+        creditsMilli: charge.creditsMilli
+      }))
+    };
+  }
+  return {
+    charged: false,
+    source: config.isCustom ? "custom" : "official",
+    provider: config.provider,
+    model: config.model,
+    reason: config.isCustom ? "custom_provider" : "usage_unavailable"
   };
 }
 
