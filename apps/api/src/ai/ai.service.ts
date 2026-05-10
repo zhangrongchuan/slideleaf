@@ -1597,7 +1597,7 @@ async function requestAiSlideFragment(input: {
       input.slide.implication
     ],
     limit: 8
-  });
+  }).filter((entry) => entry.category !== "style-direction");
   const playbookContext = renderPlaybookContext(playbookEntries);
   const prompt = JSON.stringify({
     task: "Generate exactly one HTML slide fragment. Do not generate a complete HTML document.",
@@ -1625,7 +1625,8 @@ async function requestAiSlideFragment(input: {
       rules: [
         "Build the visual as semantic HTML/CSS only: grids, tables, bars, matrix cells, roadmap rows, timeline items, flow nodes, metric cards, and callout panels.",
         "Do not use inline SVG, canvas, external chart libraries, remote images, icon libraries, or per-slide scripts.",
-        "Use shared classes such as card-grid, metric-grid, matrix-grid, chart-panel, bar-list, timeline-list, roadmap-list, flow-stack, and data-reveal.",
+        "Do not copy style-direction template class names from playbook examples. The final fragment must use shared deck classes only.",
+        "Use shared classes such as slide-content, content-frame, card-grid, metric-grid, matrix-grid, chart-panel, bar-list, timeline-list, roadmap-list, flow-stack, process-flow, architecture-grid, comparison-table, and data-reveal.",
         "For charts, encode evidence with HTML/CSS bars, rows, labels, annotations, and source/assumption notes. Do not invent data.",
         "Keep components readable, responsive, and consistent with deck.css."
       ]
@@ -1668,12 +1669,14 @@ Return only valid JSON. Do not include markdown fences.
 Slide fragment rules:
 - Return exactly one slide fragment in the slideHtml field.
 - The fragment must start with <section class="slide"...> and end with </section>.
+- The root class must be exactly "slide"; do not add style-template-* or template/private classes to the root.
 - Include data-slide-id, data-motion, and data-visual on the root.
 - Keep the root <section class="slide"> structurally simple. Do not put position, inset, top/right/bottom/left, z-index, visibility, opacity, pointer-events, width, height, min-height, max-height, or overflow styles on the root. Put visual layout inside a child container such as <div class="slide-content">.
+- Every slide must contain a direct child <div class="slide-content">. Put constrained content inside <div class="content-frame">.
 - Treat .slide-content as the full-bleed slide canvas. Do not use it as a narrow framed panel.
 - If a slide needs constrained content, put <div class="content-frame"> inside .slide-content. Backgrounds, grids, scanlines, and page-level color must cover the full .slide or full .slide-content, never only a max-width content frame.
 - Do not mix full-bleed pages and centered 16:9 framed pages in the same deck unless the DeckPlan explicitly requests a framed presentation style.
-- Do not invent template-specific class names such as bg-grid-pink, scanlines, frame, pixel-hero-text, or bubble unless those classes are defined in the shared theme. Prefer shared classes or inline component-level styles that are complete and self-contained.
+- Do not copy template class names from playbook examples or style-direction documents. Avoid style-template-*, bg-grid-pink, scanlines, frame, pixel-hero-text, bubble, and other private template selectors.
 - Do not include <!doctype>, <html>, <head>, <body>, <style>, <script>, external scripts, external stylesheets, analytics, forms, or network calls.
 - Use semantic, compact HTML that depends on the global theme/runtime.
 - Prefer strong hierarchy, action-title storytelling, evidence-backed content, and non-repetitive visual patterns.
@@ -1682,7 +1685,7 @@ Slide fragment rules:
 - Build chart, matrix, timeline, roadmap, architecture, issue-tree, risk, and metric visuals with semantic HTML/CSS components only.
 - Do not use <svg>, <canvas>, <foreignObject>, <image>, external icon libraries, chart libraries, filters, or inline event handlers.
 - For charts, encode evidence with HTML/CSS bars, rows, labels, annotations, and source/assumption notes. Do not invent data; use placeholders when evidence is missing.
-- Use shared theme classes such as card-grid, metric-grid, matrix-grid, chart-panel, bar-list, timeline-list, roadmap-list, flow-stack, visual-panel, and data-reveal.
+- Use shared theme classes such as slide-content, content-frame, two-column, eyebrow, lead, action-title, card-grid, metric-grid, matrix-grid, chart-panel, bar-list, timeline-list, roadmap-list, flow-stack, process-flow, step-card, architecture-grid, comparison-table, visual-panel, and data-reveal.
 - Keep one core message per slide and honor doNotCover.
 - Use data-reveal sparingly for sequence, and choose only the requested motion preset.
 - If evidence is missing, use explicit placeholders instead of inventing facts.

@@ -187,6 +187,34 @@ describe("DeckPlan v1", () => {
     expect(html.trim()).toMatch(/<\/section>$/);
   });
 
+  it("stabilizes template-root fragments into the shared slide contract", () => {
+    const plan = normalizeDeckPlan({
+      mainThesis: "Thesis",
+      slides: [
+        {
+          id: "s01",
+          index: 1,
+          title: "Title",
+          actionTitle: "This page proves the main thesis clearly",
+          coreMessage: "Message",
+          analysisOperator: "synthesis",
+          recommendedVisual: "executive-summary",
+          requiredEvidence: ["input"],
+          doNotCover: ["details"]
+        }
+      ]
+    });
+    const slide = plan.sections[0]!.slides[0]!;
+    const html = sanitizeSlideHtmlFragment(
+      `<section class="slide style-template-loud" data-motion="static"><div class="content"><h1>Hello</h1></div></section>`,
+      slide
+    );
+    expect(html).toContain('<section class="slide" data-slide-id="s01"');
+    expect(html).not.toContain("style-template-loud");
+    expect(html).toContain('class="slide-content"');
+    expect(html).toContain('<div class="content"><h1>Hello</h1></div>');
+  });
+
   it("repairs incomplete slide roots into a valid fragment wrapper", () => {
     const plan = normalizeDeckPlan({
       mainThesis: "Thesis",

@@ -375,20 +375,20 @@ export function sanitizeSlideHtmlFragment(html: string, slide: DeckSlidePlan): s
     .trim();
 
   if (isCompleteSingleSlideRoot(cleaned)) {
-    return ensureSlideMetadata(cleaned, slide);
+    return stabilizeSlideFragment(ensureSlideMetadata(cleaned, slide), slide);
   }
 
   const recoveredRoot = recoverFirstSlideRoot(cleaned);
   if (recoveredRoot && isCompleteSingleSlideRoot(recoveredRoot)) {
-    return ensureSlideMetadata(recoveredRoot, slide);
+    return stabilizeSlideFragment(ensureSlideMetadata(recoveredRoot, slide), slide);
   }
 
-  return `<section class="slide" data-slide-id="${escapeAttr(slide.id)}" data-motion="${escapeAttr(
+  return stabilizeSlideFragment(`<section class="slide" data-slide-id="${escapeAttr(slide.id)}" data-motion="${escapeAttr(
     slide.motionPreset ?? motionPresetFor(slide)
   )}" data-visual="${escapeAttr(slide.recommendedVisual)}">
 ${stripBrokenSlideRootTags(cleaned)}
 </section>
-`;
+`, slide);
 }
 
 export function buildProjectConfig(plan: DeckPlan): string {
@@ -411,7 +411,7 @@ export function buildDefaultDeckCss(plan: DeckPlan): string {
   const palette = Array.isArray(plan.globalStyle.palette)
     ? plan.globalStyle.palette.map(readable).filter(Boolean)
     : [];
-  const accent = palette.find((color) => /^#[0-9a-f]{6}$/i.test(color)) ?? "#2563eb";
+  const accent = palette.find(isUsableAccentColor) ?? "#2563eb";
   return `:root {
   --bg: #f8fafc;
   --fg: #0f172a;
@@ -420,6 +420,7 @@ export function buildDefaultDeckCss(plan: DeckPlan): string {
   --accent-soft: color-mix(in srgb, var(--accent) 14%, white);
   --panel: #ffffff;
   --border: #dbe3ef;
+  --ink: var(--fg);
 }
 
 body {
@@ -431,6 +432,7 @@ body {
 }
 
 .slide {
+  position: relative;
   width: 100vw;
   height: 100vh;
   height: 100dvh;
@@ -461,6 +463,16 @@ body {
 
 .content-frame.narrow {
   width: min(900px, 100%);
+}
+
+.content {
+  width: min(1120px, 100%);
+  height: 100%;
+  box-sizing: border-box;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .two-column {
@@ -507,12 +519,55 @@ p {
   line-height: 1.5;
 }
 
+.lead {
+  max-width: 880px;
+  font-size: clamp(20px, 2.35vw, 30px);
+  line-height: 1.36;
+  color: color-mix(in srgb, var(--fg) 78%, var(--muted));
+}
+
+.action-title {
+  max-width: 1080px;
+}
+
+.bg-block {
+  position: absolute;
+  pointer-events: none;
+  width: clamp(120px, 18vw, 260px);
+  height: clamp(120px, 18vw, 260px);
+  border-radius: 24px;
+  opacity: 0.13;
+  transform: rotate(8deg);
+}
+
+.bg-block.red {
+  top: 6%;
+  left: 5%;
+  background: #ef4444;
+}
+
+.bg-block.blue {
+  right: 7%;
+  top: 12%;
+  background: #2563eb;
+}
+
+.bg-block.yellow {
+  right: 16%;
+  bottom: 9%;
+  background: #facc15;
+}
+
 .card-grid,
 .metric-grid,
 .matrix-grid {
   display: grid;
   gap: 18px;
   margin-top: 32px;
+}
+
+.card-grid:not(.three) {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .card-grid.three,
@@ -524,12 +579,49 @@ p {
 .metric,
 .callout,
 .flow-node,
-.matrix-cell {
+.matrix-cell,
+.step,
+.step-card,
+.proof-point,
+.counterpoint,
+.implication-note,
+.implication-footer,
+.footer-note,
+.chat-mockup,
+.visual-previews,
+.preview-card,
+.file-node,
+.comparison-panel {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel);
   box-shadow: 0 16px 38px rgba(15, 23, 42, 0.08);
   padding: 22px;
+}
+
+.card h3,
+.step h3,
+.step-card h3,
+.file-node h3,
+.chat-mockup h3,
+.visual-previews h3 {
+  margin: 0 0 10px;
+  font-size: clamp(18px, 1.7vw, 24px);
+  line-height: 1.12;
+}
+
+.card p,
+.step p,
+.step-card p,
+.file-node p,
+.proof-point p,
+.counterpoint p,
+.implication-note p,
+.implication-footer p,
+.footer-note p {
+  margin-top: 8px;
+  font-size: clamp(14px, 1.35vw, 18px);
+  line-height: 1.45;
 }
 
 .metric strong {
@@ -556,8 +648,129 @@ p {
   gap: 12px;
 }
 
+.process-flow,
+.content-grid,
+.architecture-grid,
+.preview-grid {
+  display: grid;
+  gap: 18px;
+  margin-top: 30px;
+}
+
+.process-flow {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.content-grid,
+.architecture-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.preview-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.step-card > span {
+  display: inline-grid;
+  place-items: center;
+  min-width: 34px;
+  height: 34px;
+  margin-bottom: 14px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 900;
+}
+
 .flow-node {
   font-weight: 800;
+}
+
+.comparison-table:not(table) {
+  display: grid;
+  margin-top: 30px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.08);
+}
+
+.table-header,
+.table-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.table-header > *,
+.table-row > * {
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 14px 16px;
+}
+
+.table-header {
+  background: color-mix(in srgb, var(--accent) 9%, white);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.file-node {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.file-icon {
+  width: 32px;
+  height: 38px;
+  border-radius: 8px;
+  background: var(--accent);
+  box-shadow: 5px 5px 0 rgba(15, 23, 42, 0.14);
+}
+
+.file-icon.red {
+  background: #ef4444;
+}
+
+.file-icon.blue {
+  background: #2563eb;
+}
+
+.file-icon.yellow {
+  background: #facc15;
+}
+
+.file-icon.black {
+  background: #111827;
+}
+
+.preview-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 32px;
+  margin-bottom: 12px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.mono-caption {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  color: var(--muted);
 }
 
 .visual-panel,
@@ -651,7 +864,13 @@ th {
   .two-column,
   .card-grid.three,
   .metric-grid.three,
-  .matrix-grid {
+  .matrix-grid,
+  .process-flow,
+  .content-grid,
+  .architecture-grid,
+  .preview-grid,
+  .table-header,
+  .table-row {
     grid-template-columns: 1fr;
   }
 }
@@ -828,6 +1047,18 @@ function normalizePreferredFormat(raw: unknown): DataNeed["preferredFormat"] {
   );
 }
 
+function isUsableAccentColor(color: string): boolean {
+  const match = /^#([0-9a-f]{6})$/i.exec(color.trim());
+  if (!match) return false;
+  const hex = match[1]!;
+  const r = Number.parseInt(hex.slice(0, 2), 16);
+  const g = Number.parseInt(hex.slice(2, 4), 16);
+  const b = Number.parseInt(hex.slice(4, 6), 16);
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const saturationProxy = Math.max(r, g, b) - Math.min(r, g, b);
+  return luminance < 235 && saturationProxy > 24;
+}
+
 function normalizeSlide(slide: Record<string, unknown>, index: number): DeckSlidePlan {
   const operator = normalizeEnum(readable(slide.analysisOperator) || readable(slide.operator), ANALYSIS_OPERATORS, "synthesis");
   const visual = normalizeEnum(readable(slide.recommendedVisual) || readable(slide.visualPattern) || readable(slide.layout), RECOMMENDED_VISUALS, "executive-summary");
@@ -939,6 +1170,37 @@ function ensureSlideMetadata(html: string, slide: DeckSlidePlan): string {
       : `${withMotion} data-visual="${escapeAttr(slide.recommendedVisual)}"`;
     return `<${tag}${withVisual}>`;
   });
+}
+
+function stabilizeSlideFragment(html: string, slide: DeckSlidePlan): string {
+  return ensureSlideContentWrapper(normalizeSlideRoot(html, slide));
+}
+
+function normalizeSlideRoot(html: string, slide: DeckSlidePlan): string {
+  const opening = `<section class="slide" data-slide-id="${escapeAttr(slide.id)}" data-motion="${escapeAttr(
+    motionPresetFor(slide)
+  )}" data-visual="${escapeAttr(slide.recommendedVisual)}">`;
+  return html
+    .trim()
+    .replace(/^\s*<(section|article)\b[^>]*>/i, opening)
+    .replace(/<\/article>\s*$/i, "</section>")
+    .replace(/<\/section>\s*$/i, "</section>\n");
+}
+
+function ensureSlideContentWrapper(html: string): string {
+  if (/\bclass=(["'])[^"']*\bslide-content\b[^"']*\1/i.test(html)) return html;
+  const openMatch = /^\s*<section\b[^>]*>/i.exec(html);
+  if (!openMatch) return html;
+  const openEnd = openMatch[0].length;
+  const closeIndex = html.toLowerCase().lastIndexOf("</section>");
+  if (closeIndex <= openEnd) return html;
+  const inner = html.slice(openEnd, closeIndex).trim();
+  return `${html.slice(0, openEnd)}
+  <div class="slide-content">
+${inner}
+  </div>
+</section>
+`;
 }
 
 function hasCycle(slides: DeckSlidePlan[]): boolean {
