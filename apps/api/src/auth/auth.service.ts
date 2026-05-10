@@ -201,17 +201,17 @@ function secureCookie(): boolean {
 }
 
 function toRequestUser(user: { id: string; email: string; name: string | null; creditsMilli?: number | null }): RequestUser {
-  const creditsMilli = Math.max(0, user.creditsMilli ?? 0);
+  const credits = Math.max(0, user.creditsMilli ?? 0);
   return {
     id: user.id,
     email: user.email,
     name: user.name,
-    credits: creditsMilli / 1000,
-    creditsMilli
+    credits,
+    creditsMilli: credits
   };
 }
 
 function startingCreditsMilli(): number {
   const parsed = Number.parseFloat(process.env.STARTING_CREDITS ?? "0");
-  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 1000) : 0;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 0;
 }

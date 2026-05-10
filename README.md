@@ -222,7 +222,7 @@ SlideLeaf uses credits for official server model calls:
 - `1 USD = 1000 credits`.
 - Official model usage is billed at the direct API token price converted to credits, then multiplied by `1.5`.
 - Own API keys configured in Settings do not consume SlideLeaf credits.
-- Balances are stored as `creditsMilli`, where `1000 creditsMilli = 1 credit`, so fractional charges stay precise.
+- Balances are stored as integer credits; token charges are rounded up to the next whole credit.
 
 Current official pricing table:
 
@@ -233,7 +233,7 @@ Current official pricing table:
 | Claude Sonnet 4.6 | 4500 | 22500 | Backend ready, hidden |
 | Claude Opus 4.7 | 7500 | 37500 | Backend ready, hidden |
 
-DeepSeek V4 Pro uses the current cache-miss promotional rate captured on 2026-05-10; update the pricing constants when provider pricing changes.
+DeepSeek V4 Pro uses the current cache-miss promotional rate captured on 2026-05-10; update the pricing constants when provider pricing changes. The Prisma field is currently named `creditsMilli` for compatibility, but its value is treated as the account's displayed credit balance.
 
 Set `STARTING_CREDITS` in `.env` if new accounts should receive an initial balance during development or a private beta.
 

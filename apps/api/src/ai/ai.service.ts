@@ -1220,9 +1220,9 @@ export class AiService {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
       creditsMilli,
-      credits: creditsMilli / 1000,
+      credits: creditsMilli,
       remainingCreditsMilli,
-      remainingCredits: remainingCreditsMilli / 1000
+      remainingCredits: remainingCreditsMilli
     };
   }
 
@@ -2483,7 +2483,6 @@ const MODEL_LIMITS = {
 } as const;
 
 const CREDITS_PER_USD = 1000;
-const MILLI_CREDITS_PER_CREDIT = 1000;
 const OFFICIAL_MODEL_MARKUP = 1.5;
 
 type OfficialModelPricing = {
@@ -2526,13 +2525,13 @@ function officialModelPricing(config: AiProviderConfig): OfficialModelPricing | 
 function calculateCreditsMilli(usage: TokenUsage, pricing: OfficialModelPricing): number {
   const inputUsd = (usage.inputTokens * pricing.inputUsdPerMillion) / 1_000_000;
   const outputUsd = (usage.outputTokens * pricing.outputUsdPerMillion) / 1_000_000;
-  return Math.ceil((inputUsd + outputUsd) * CREDITS_PER_USD * OFFICIAL_MODEL_MARKUP * MILLI_CREDITS_PER_CREDIT);
+  return Math.ceil((inputUsd + outputUsd) * CREDITS_PER_USD * OFFICIAL_MODEL_MARKUP);
 }
 
 function formatCredits(creditsMilli: number): string {
-  return (creditsMilli / MILLI_CREDITS_PER_CREDIT).toLocaleString("en-US", {
+  return creditsMilli.toLocaleString("en-US", {
     minimumFractionDigits: 0,
-    maximumFractionDigits: 3
+    maximumFractionDigits: 0
   });
 }
 
@@ -2549,7 +2548,7 @@ function summarizeCreditCharges(charges: CreditCharge[]): CreditCharge | undefin
     inputTokens,
     outputTokens,
     creditsMilli,
-    credits: creditsMilli / MILLI_CREDITS_PER_CREDIT,
+    credits: creditsMilli,
     remainingCreditsMilli: last.remainingCreditsMilli,
     remainingCredits: last.remainingCredits
   };

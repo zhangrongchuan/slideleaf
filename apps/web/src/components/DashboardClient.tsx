@@ -552,11 +552,5 @@ function CreditBadge({ creditsMilli }: { creditsMilli?: number | null }) {
 }
 
 function formatCreditsMilli(value?: number | null): string {
-  const creditsMilli = Math.max(0, Math.round(value ?? 0));
-  const whole = Math.floor(creditsMilli / 1000);
-  const remainder = creditsMilli % 1000;
-  const wholeText = whole.toLocaleString("en-US");
-  if (remainder === 0) return wholeText;
-  const fractional = String(remainder).padStart(3, "0").replace(/0+$/, "");
-  return `${wholeText}.${fractional}`;
+  return Math.max(0, Math.round(value ?? 0)).toLocaleString("en-US");
 }

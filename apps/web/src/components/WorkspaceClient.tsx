@@ -2825,7 +2825,7 @@ function MessageContent({ message }: { message: AiMessage }) {
         ) : null}
         {creditCharge?.credits ? (
           <div className="inline-flex rounded-full border border-amber-100 bg-amber-50 px-2 py-1 text-[11px] font-mono text-amber-700">
-            -{formatCreditsMilli(creditCharge.creditsMilli ?? Math.round(creditCharge.credits * 1000))} credits
+            -{formatCreditsMilli(creditCharge.creditsMilli ?? creditCharge.credits)} credits
           </div>
         ) : null}
       </div>
@@ -3422,13 +3422,7 @@ function errorMessage(err: unknown): string {
 }
 
 function formatCreditsMilli(value?: number | null): string {
-  const creditsMilli = Math.max(0, Math.round(value ?? 0));
-  const whole = Math.floor(creditsMilli / 1000);
-  const remainder = creditsMilli % 1000;
-  const wholeText = whole.toLocaleString("en-US");
-  if (remainder === 0) return wholeText;
-  const fractional = String(remainder).padStart(3, "0").replace(/0+$/, "");
-  return `${wholeText}.${fractional}`;
+  return Math.max(0, Math.round(value ?? 0)).toLocaleString("en-US");
 }
 
 function delay(ms: number): Promise<void> {
