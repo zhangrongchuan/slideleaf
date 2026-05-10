@@ -9,6 +9,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  Coins,
   Download,
   Clock3,
   FileCode2,
@@ -833,9 +834,7 @@ Return complete replacement workspace files for review. Preserve the chosen deck
           <span className="rounded-full border border-white/10 bg-white/8 px-2 py-1 text-xs text-slate-300">
             {roleLabel(currentRole)}
           </span>
-          <span className="rounded-full border border-white/10 bg-white/8 px-2 py-1 text-xs text-slate-300">
-            Credits {formatCreditBalance(currentUser?.credits ?? 0)}
-          </span>
+          <CreditBadge creditsMilli={currentUser?.creditsMilli} />
           <ToolbarButton onClick={() => void openMembersPanel()} label="Members">
             <Users size={16} />
           </ToolbarButton>
@@ -2776,6 +2775,16 @@ function Tag({ children }: { children: React.ReactNode }) {
   );
 }
 
+function CreditBadge({ creditsMilli }: { creditsMilli?: number | null }) {
+  return (
+    <span className="inline-flex h-8 items-center gap-1.5 rounded-full border border-cyan-300/25 bg-cyan-300/10 px-2.5 text-xs text-cyan-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.10)]">
+      <Coins size={14} className="text-cyan-200" />
+      <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-cyan-200/75">Credits</span>
+      <span className="font-mono font-semibold tabular-nums text-white">{formatCreditsMilli(creditsMilli)}</span>
+    </span>
+  );
+}
+
 function ChatBubble({ role, children }: { role: "assistant" | "user"; children: React.ReactNode }) {
   return (
     <div className={`flex min-w-0 ${role === "user" ? "justify-end" : "justify-start"}`}>
@@ -2798,7 +2807,7 @@ function MessageContent({ message }: { message: AiMessage }) {
 
   // Extract token usage
   const usage = message.metadata?.usage as { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined;
-  const creditCharge = message.metadata?.creditCharge as { credits?: number; remainingCredits?: number } | undefined;
+  const creditCharge = message.metadata?.creditCharge as { credits?: number; creditsMilli?: number; remainingCredits?: number } | undefined;
 
   return (
     <div className="max-w-[34rem]">
@@ -2816,7 +2825,7 @@ function MessageContent({ message }: { message: AiMessage }) {
         ) : null}
         {creditCharge?.credits ? (
           <div className="inline-flex rounded-full border border-amber-100 bg-amber-50 px-2 py-1 text-[11px] font-mono text-amber-700">
-            -{formatCreditBalance(creditCharge.credits)} credits
+            -{formatCreditsMilli(creditCharge.creditsMilli ?? Math.round(creditCharge.credits * 1000))} credits
           </div>
         ) : null}
       </div>
@@ -3412,11 +3421,14 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function formatCreditBalance(value: number): string {
-  return value.toLocaleString("en-US", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 3
-  });
+function formatCreditsMilli(value?: number | null): string {
+  const creditsMilli = Math.max(0, Math.round(value ?? 0));
+  const whole = Math.floor(creditsMilli / 1000);
+  const remainder = creditsMilli % 1000;
+  const wholeText = whole.toLocaleString("en-US");
+  if (remainder === 0) return wholeText;
+  const fractional = String(remainder).padStart(3, "0").replace(/0+$/, "");
+  return `${wholeText}.${fractional}`;
 }
 
 function delay(ms: number): Promise<void> {

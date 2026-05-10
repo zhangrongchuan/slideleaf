@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, FilePlus2, KeyRound, LogOut, Pencil, Plus, Settings, Trash2, X } from "lucide-react";
+import { ArrowRight, Coins, FilePlus2, KeyRound, LogOut, Pencil, Plus, Settings, Trash2, X } from "lucide-react";
 import { BrandMark } from "./BrandMark";
 import { apiFetch } from "../lib/api";
 import {
@@ -146,9 +146,7 @@ export function DashboardClient() {
       <header className="flex h-14 items-center justify-between border-b border-white/10 bg-[#0b1020] px-6 text-white shadow-[0_10px_30px_rgba(15,23,42,0.18)]">
         <BrandMark href="/dashboard" nameClassName="font-semibold text-white" markClassName="bg-transparent" />
         <div className="flex items-center gap-2">
-          <span className="inline-flex h-9 items-center rounded-lg border border-white/15 bg-white/8 px-3 text-sm text-slate-100">
-            Credits {formatCreditBalance(currentUser?.credits ?? 0)}
-          </span>
+          <CreditBadge creditsMilli={currentUser?.creditsMilli} />
           <button
             onClick={() => setSettingsOpen(true)}
             className="inline-flex h-9 items-center gap-2 rounded-lg border border-white/15 bg-white/8 px-3 text-sm text-slate-100 transition hover:bg-white/12"
@@ -372,7 +370,7 @@ function SettingsPanel({
               </p>
             </div>
             <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm leading-6 text-blue-900">
-              Official model balance: <span className="font-semibold">{formatCreditBalance(user?.credits ?? 0)} credits</span>.
+              Official model balance: <span className="font-mono font-semibold">{formatCreditsMilli(user?.creditsMilli)} credits</span>.
               Own API keys do not consume SlideLeaf credits.
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -543,9 +541,22 @@ function SettingsPanel({
   );
 }
 
-function formatCreditBalance(value: number): string {
-  return value.toLocaleString("en-US", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 3
-  });
+function CreditBadge({ creditsMilli }: { creditsMilli?: number | null }) {
+  return (
+    <span className="inline-flex h-9 items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 text-sm text-cyan-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.10)]">
+      <Coins size={15} className="text-cyan-200" />
+      <span className="text-xs font-medium uppercase tracking-[0.14em] text-cyan-200/80">Credits</span>
+      <span className="font-mono text-sm font-semibold tabular-nums text-white">{formatCreditsMilli(creditsMilli)}</span>
+    </span>
+  );
+}
+
+function formatCreditsMilli(value?: number | null): string {
+  const creditsMilli = Math.max(0, Math.round(value ?? 0));
+  const whole = Math.floor(creditsMilli / 1000);
+  const remainder = creditsMilli % 1000;
+  const wholeText = whole.toLocaleString("en-US");
+  if (remainder === 0) return wholeText;
+  const fractional = String(remainder).padStart(3, "0").replace(/0+$/, "");
+  return `${wholeText}.${fractional}`;
 }
