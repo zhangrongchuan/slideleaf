@@ -1497,6 +1497,12 @@ function AssistantPane({
           {messages.map((message) => (
             <ChatBubble key={message.id} role={message.role === "user" ? "user" : "assistant"}>
               <MessageContent message={message} showBilling={!deferredBillingMessageIds.has(message.id)} />
+              {message.role === "assistant" ? (
+                <MessageArtifactAttachment
+                  message={message}
+                  artifacts={artifacts}
+                />
+              ) : null}
             </ChatBubble>
           ))}
 
@@ -2377,6 +2383,27 @@ function ArtifactPreview({
   );
 }
 
+function MessageArtifactAttachment({ message, artifacts }: { message: AiMessage; artifacts: AiArtifact[] }) {
+  const artifactId = messageArtifactId(message);
+  if (!artifactId) return null;
+  const artifact = artifacts.find((item) => item.id === artifactId);
+  if (!artifact) return null;
+
+  return (
+    <div className="mt-3 max-w-[44rem]">
+      <ArtifactPreview
+        artifact={artifact}
+        running={false}
+        canEdit={false}
+        onStartStyle={() => undefined}
+        onStartPlan={() => undefined}
+        onGenerateHtml={() => undefined}
+        htmlGenerationRequested
+      />
+    </div>
+  );
+}
+
 function BriefArtifact({
   artifact,
   running,
@@ -2585,14 +2612,16 @@ function VisualDirectionArtifact({
                             Preview
                           </button>
                         ) : null}
-                        <button
-                          onClick={() => onStartPlan(id)}
-                          disabled={running || !canEdit}
-                          className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-[0_12px_26px_rgba(15,23,42,0.22)] transition hover:bg-slate-800 disabled:opacity-40"
-                        >
-                          <Check size={15} />
-                          Use this
-                        </button>
+                        {canEdit ? (
+                          <button
+                            onClick={() => onStartPlan(id)}
+                            disabled={running}
+                            className="inline-flex h-10 items-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white shadow-[0_12px_26px_rgba(15,23,42,0.22)] transition hover:bg-slate-800 disabled:opacity-40"
+                          >
+                            <Check size={15} />
+                            Use this
+                          </button>
+                        ) : null}
                       </div>
                     </div>
 
@@ -3608,6 +3637,10 @@ function isMessageAfterArtifact(message: AiMessage, artifact: AiArtifact): boole
 
 function messageClientRequestId(message: AiMessage): string {
   return textField(asRecord(message.metadata), "clientRequestId");
+}
+
+function messageArtifactId(message: AiMessage): string {
+  return textField(asRecord(message.metadata), "artifactId");
 }
 
 function workflowRunFromArtifact(artifact: AiArtifact | null): WorkflowRun | null {
