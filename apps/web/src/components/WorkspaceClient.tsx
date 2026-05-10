@@ -151,6 +151,16 @@ type WorkflowRun = {
   type: ArtifactType;
   label: string;
 };
+type PendingChatEntry = {
+  id: string;
+  prompt: string;
+  displayText?: string;
+  title: string;
+  description: string;
+  status: "running" | "failed";
+  error?: string;
+  taskId?: string;
+};
 type SubmitAction =
   | { kind: "artifact"; type: ArtifactType }
   | { kind: "edit" };
@@ -194,6 +204,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   const [localAiProviders, setLocalAiProviders] = useState<LocalAiProviderConfig[]>([]);
   const [deckTextDensity, setDeckTextDensity] = useState<DeckTextDensity>("balanced");
   const [lastAiPrompt, setLastAiPrompt] = useState("");
+  const [pendingChatEntries, setPendingChatEntries] = useState<PendingChatEntry[]>([]);
   const [workflowRun, setWorkflowRun] = useState<WorkflowRun | null>(null);
   const [aiTask, setAiTask] = useState<AiTask | null>(null);
   const [htmlGenerationRequested, setHtmlGenerationRequested] = useState(false);
@@ -225,6 +236,12 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   const latestRunArtifact = useMemo(() => latestGenerationRun(aiArtifacts), [aiArtifacts]);
   const latestRunStatus = latestRunArtifact ? textField(asRecord(latestRunArtifact.contentJson), "status") || latestRunArtifact.status : "";
   const latestWorkflowArtifact = useMemo(() => latestRunningWorkflowArtifact(aiArtifacts), [aiArtifacts]);
+  const aiRequestInFlight =
+    Boolean(workflowRun) ||
+    aiTask?.status === "running" ||
+    latestRunStatus === "running" ||
+    Boolean(latestWorkflowArtifact) ||
+    pendingChatEntries.some((entry) => entry.status === "running");
   const workspaceIsStacked = workspaceWidth > 0 && workspaceWidth <= WORKSPACE_STACK_BREAKPOINT;
   const maxLeftWidth = useMemo(() => {
     if (!workspaceWidth || workspaceIsStacked) return LEFT_MAX_WIDTH;
@@ -252,8 +269,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
   const workspaceGridColumns = workspaceIsStacked
     ? "1fr"
     : `${effectiveLeftWidth}px ${RESIZE_HANDLE_WIDTH}px ${effectiveCenterWidth}px ${RESIZE_HANDLE_WIDTH}px minmax(${PREVIEW_MIN_WIDTH}px, 1fr)`;
-  const shouldPollAi =
-    Boolean(workflowRun) || aiTask?.status === "running" || latestRunStatus === "running" || Boolean(latestWorkflowArtifact);
+  const shouldPollAi = aiRequestInFlight;
 
   useEffect(() => {
     void loadProject();
@@ -285,6 +301,12 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     }, 1800);
     return () => window.clearInterval(interval);
   }, [shouldPollAi, projectId]);
+
+  useEffect(() => {
+    setPendingChatEntries((current) =>
+      current.filter((entry) => !isPendingEntrySaved(entry, aiMessages))
+    );
+  }, [aiMessages]);
 
   useEffect(() => {
     if (!notice && !operationError) return;
@@ -375,6 +397,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       setAiMessages(aiData.messages);
       setAiArtifacts(aiData.artifacts);
       restoreAiTaskFromWorkflow(aiData.tasks, aiData.artifacts);
+      reconcilePendingChatEntries(aiData.messages, aiData.tasks);
       setActiveTab("assistant");
 
       if (!autoCompileStartedRef.current) {
@@ -405,6 +428,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
     setAiMessages(data.messages);
     setAiArtifacts(data.artifacts);
     restoreAiTaskFromWorkflow(data.tasks, data.artifacts);
+    reconcilePendingChatEntries(data.messages, data.tasks);
   }
 
   function restoreAiTaskFromWorkflow(tasks: AiTask[] | undefined, artifacts: AiArtifact[]) {
@@ -423,6 +447,56 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       setLastAiPrompt("");
       setWorkflowRun(null);
     }
+  }
+
+  function reconcilePendingChatEntries(messages: AiMessage[], tasks?: AiTask[]) {
+    const activeTaskIds = new Set((tasks ?? []).map((task) => task.id));
+    setPendingChatEntries((current) =>
+      current.filter((entry) => {
+        if (isPendingEntrySaved(entry, messages)) return false;
+        if (entry.taskId && !activeTaskIds.has(entry.taskId)) return false;
+        return true;
+      })
+    );
+  }
+
+  function enqueuePendingChatEntry(prompt: string, title: string, description: string, displayText?: string): string {
+    const id = `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setPendingChatEntries((current) => [
+      ...current,
+      {
+        id,
+        prompt,
+        displayText,
+        title,
+        description,
+        status: "running"
+      }
+    ]);
+    return id;
+  }
+
+  function attachPendingTask(entryId: string, task?: AiTask | null) {
+    if (!task?.id) return;
+    setPendingChatEntries((current) =>
+      current.map((entry) => (entry.id === entryId ? { ...entry, taskId: task.id } : entry))
+    );
+  }
+
+  function failPendingChatEntry(entryId: string, error: string) {
+    setPendingChatEntries((current) =>
+      current.map((entry) =>
+        entry.id === entryId
+          ? {
+              ...entry,
+              status: "failed",
+              title: "Request failed",
+              description: error,
+              error
+            }
+          : entry
+      )
+    );
   }
 
   async function loadMembers() {
@@ -646,6 +720,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
 
   async function requestAiEdit() {
     if (!canEdit) return;
+    if (aiRequestInFlight) return;
     if (!aiInstruction.trim()) return;
     const prompt = aiInstruction.trim();
     const action = resolveSubmitAction(aiMode, aiConversation?.stage);
@@ -658,6 +733,14 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
 
   async function submitAiPrompt(prompt: string, displayLabel?: string) {
     if (!canEdit) return;
+    if (aiRequestInFlight) return;
+    const previousTask = aiTask;
+    const pendingEntryId = enqueuePendingChatEntry(
+      prompt,
+      "Refining the deck",
+      "I am reading the current workspace and preparing a reviewable response. The result will appear here when it is ready.",
+      displayLabel
+    );
     setAiError("");
     setLastAiPrompt(displayLabel || prompt);
     setAiInstruction("");
@@ -670,6 +753,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         method: "POST",
         body: JSON.stringify({
           conversationId: aiConversation?.id,
+          clientRequestId: pendingEntryId,
           fileId: selectedFile?.kind === "file" && !selectedFile.isBinary ? selectedFile.id : undefined,
           instruction: prompt,
           ...providerPayload,
@@ -677,19 +761,30 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         })
       });
       setAiTask(data.task);
+      attachPendingTask(pendingEntryId, data.task);
       await loadAiWorkflow();
       if (data.task.status !== "running") {
         setLastAiPrompt("");
       }
     } catch (err) {
-      setAiError(errorMessage(err));
+      const message = errorMessage(err);
+      setAiError(message);
+      failPendingChatEntry(pendingEntryId, message);
+      setAiTask(previousTask?.status === "needs_review" ? previousTask : null);
     }
   }
 
   async function generateWorkflowArtifact(type: ArtifactType, promptOverride?: string, displayLabel?: string) {
     if (!canEdit) return;
+    if (aiRequestInFlight) return;
     const prompt = promptOverride?.trim() || aiInstruction.trim();
     const visiblePrompt = displayLabel || prompt || `Generate ${artifactLabel(type)}`;
+    const pendingEntryId = enqueuePendingChatEntry(
+      prompt || visiblePrompt,
+      workflowRunLabel(type),
+      workflowRunDescription(type),
+      visiblePrompt
+    );
     setAiError("");
     setAiInstruction("");
     setLastAiPrompt(visiblePrompt);
@@ -704,6 +799,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         method: "POST",
         body: JSON.stringify({
           conversationId: aiConversation?.id,
+          clientRequestId: pendingEntryId,
           type,
           instruction: prompt || displayLabel || undefined,
           ...providerPayload,
@@ -711,6 +807,7 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         })
       });
       if (data.task) setAiTask(data.task);
+      attachPendingTask(pendingEntryId, data.task);
       setNotice(`${artifactLabel(type)} started`);
       await loadAiWorkflow();
       if (data.artifact?.status !== "failed") {
@@ -718,7 +815,9 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
       }
       setLastAiPrompt("");
     } catch (err) {
-      setAiError(errorMessage(err));
+      const message = errorMessage(err);
+      setAiError(message);
+      failPendingChatEntry(pendingEntryId, message);
     } finally {
       setWorkflowRun(null);
     }
@@ -726,7 +825,13 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
 
   async function generateHtmlFromPlan() {
     if (!canEdit) return;
-    if (htmlGenerationRequested || aiTask?.status === "running") return;
+    if (htmlGenerationRequested || aiRequestInFlight) return;
+    const pendingEntryId = enqueuePendingChatEntry(
+      "Generate the deck slide by slide from the approved DeckPlan.",
+      "Generating workspace files",
+      "I am creating slide files from the approved plan. Each slide will appear in the generation tracker as it completes.",
+      "Freeze DeckPlan and generate slides page by page"
+    );
     setHtmlGenerationRequested(true);
     setAiError("");
     setAiInstruction("");
@@ -749,24 +854,27 @@ export function WorkspaceClient({ projectId }: { projectId: string }) {
         method: "POST",
         body: JSON.stringify({
           conversationId: aiConversation?.id,
+          clientRequestId: pendingEntryId,
           planArtifactId: planArtifact.id,
           ...providerPayload,
           density: deckTextDensity
         })
       });
       setAiTask(data.task);
+      attachPendingTask(pendingEntryId, data.task);
       await loadAiWorkflow();
       setLastAiPrompt("");
     } catch (err) {
       const message = errorMessage(err);
       setAiError(message);
+      failPendingChatEntry(pendingEntryId, message);
       setAiTask({ id: "pending", status: "failed", log: message });
     }
   }
 
   async function repairCompileIssue() {
     if (!canEdit) return;
-    if (aiTask?.status === "running") return;
+    if (aiRequestInFlight) return;
     const prompt = `Repair the current HTML deck so it compiles and passes the SlideLeaf quality gate.
 
 Use this compile log as the primary diagnostic source:
@@ -988,6 +1096,7 @@ Return complete replacement workspace files for review. Preserve the chosen deck
               textDensity={deckTextDensity}
               canEdit={canEdit}
               lastPrompt={lastAiPrompt}
+              pendingEntries={pendingChatEntries}
               workflowRun={workflowRun}
               task={aiTask}
               htmlGenerationRequested={htmlGenerationRequested}
@@ -1283,6 +1392,7 @@ function AssistantPane({
   textDensity,
   canEdit,
   lastPrompt,
+  pendingEntries,
   workflowRun,
   task,
   htmlGenerationRequested,
@@ -1307,6 +1417,7 @@ function AssistantPane({
   textDensity: DeckTextDensity;
   canEdit: boolean;
   lastPrompt: string;
+  pendingEntries: PendingChatEntry[];
   workflowRun: WorkflowRun | null;
   task: AiTask | null;
   htmlGenerationRequested: boolean;
@@ -1325,17 +1436,27 @@ function AssistantPane({
   const runningArtifact = latestRunningWorkflowArtifact(artifacts);
   const activeWorkflowRun = workflowRun ?? workflowRunFromArtifact(runningArtifact);
   const generationRun = latestGenerationRun(artifacts);
+  const visiblePendingEntries = pendingEntries.filter((entry) => !isPendingEntrySaved(entry, messages));
   const showTaskRunningBubble =
-    task?.status === "running" && !activeWorkflowRun && !isRunningDeckGenerationTask(task, generationRun);
-  const busy = Boolean(activeWorkflowRun) || task?.status === "running";
+    task?.status === "running" &&
+    !activeWorkflowRun &&
+    !visiblePendingEntries.length &&
+    !isRunningDeckGenerationTask(task, generationRun);
+  const busy =
+    Boolean(activeWorkflowRun) ||
+    task?.status === "running" ||
+    visiblePendingEntries.some((entry) => entry.status === "running");
   const chatEndRef = useRef<HTMLDivElement>(null);
   const lastPromptAlreadySaved = Boolean(
     lastPrompt && messages.some((message) => message.role === "user" && message.content === lastPrompt)
   );
+  const lastPromptAlreadyPending = Boolean(
+    lastPrompt && visiblePendingEntries.some((entry) => entry.prompt === lastPrompt || entry.displayText === lastPrompt)
+  );
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-  }, [messages.length, lastPrompt, activeWorkflowRun?.label, task?.status, error]);
+  }, [messages.length, lastPrompt, visiblePendingEntries.length, activeWorkflowRun?.label, task?.status, error]);
 
   return (
     <section className="grid h-[calc(100%-44px)] grid-rows-[46px_minmax(0,1fr)_auto] bg-[#f4f7fb]">
@@ -1362,13 +1483,32 @@ function AssistantPane({
             </ChatBubble>
           ))}
 
-          {lastPrompt && !lastPromptAlreadySaved ? (
+          {visiblePendingEntries.map((entry) => (
+            <div key={entry.id} className="contents">
+              <ChatBubble role="user">
+                <div className="max-w-[34rem] whitespace-pre-wrap text-sm leading-6">
+                  {entry.displayText || entry.prompt}
+                </div>
+              </ChatBubble>
+              <ChatBubble role="assistant">
+                {entry.status === "failed" ? (
+                  <div className="rounded-md bg-red-50 px-3 py-2 text-sm leading-6 text-red-700">
+                    {entry.error || entry.description}
+                  </div>
+                ) : (
+                  <RunningBubble title={entry.title} description={entry.description} />
+                )}
+              </ChatBubble>
+            </div>
+          ))}
+
+          {lastPrompt && !lastPromptAlreadySaved && !lastPromptAlreadyPending ? (
             <ChatBubble role="user">
               <div className="max-w-[34rem] whitespace-pre-wrap text-sm leading-6">{lastPrompt}</div>
             </ChatBubble>
           ) : null}
 
-          {activeWorkflowRun ? (
+          {activeWorkflowRun && !visiblePendingEntries.length ? (
             <ChatBubble role="assistant">
               <RunningBubble
                 title={activeWorkflowRun.label}
@@ -1480,7 +1620,7 @@ function AssistantPane({
               onKeyDown={(event) => {
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                   event.preventDefault();
-                  onAsk();
+                  if (!busy) onAsk();
                 }
               }}
               rows={2}
@@ -2450,7 +2590,7 @@ function VisualDirectionArtifact({
                       ))}
                     </div>
 
-                    <details className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                    <details className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2" open>
                       <summary className="cursor-pointer text-xs font-semibold text-slate-600">
                         Design notes
                       </summary>
@@ -2726,7 +2866,7 @@ function MiniFact({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
-      <div className="mt-1 max-h-[3.75rem] overflow-hidden text-xs leading-5 text-slate-700">{value}</div>
+      <div className="mt-1 text-xs leading-5 text-slate-700">{value}</div>
     </div>
   );
 }
@@ -3252,6 +3392,18 @@ function latestRunningWorkflowArtifact(artifacts: AiArtifact[]): AiArtifact | nu
         (artifact.type === "brief" || artifact.type === "visual_direction" || artifact.type === "slide_plan")
     ) ?? null
   );
+}
+
+function isPendingEntrySaved(entry: PendingChatEntry, messages: AiMessage[]): boolean {
+  return messages.some((message) => {
+    if (message.role !== "user") return false;
+    if (entry.taskId && message.aiTaskId === entry.taskId) return true;
+    return messageClientRequestId(message) === entry.id;
+  });
+}
+
+function messageClientRequestId(message: AiMessage): string {
+  return textField(asRecord(message.metadata), "clientRequestId");
 }
 
 function workflowRunFromArtifact(artifact: AiArtifact | null): WorkflowRun | null {

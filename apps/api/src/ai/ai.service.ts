@@ -153,11 +153,11 @@ export class AiService {
   async getConversation(userId: string, projectId: string, conversationId?: string) {
     await this.projects.assertAccess(userId, projectId, "viewer");
     const conversation = await this.getOrCreateProjectConversation(userId, projectId, conversationId);
-    const messages = await this.prisma.aiMessage.findMany({
+    const messages = (await this.prisma.aiMessage.findMany({
       where: { conversationId: conversation.id },
-      orderBy: { createdAt: "asc" },
+      orderBy: { createdAt: "desc" },
       take: 120
-    });
+    })).reverse();
 
     return { conversation, messages };
   }
@@ -168,9 +168,9 @@ export class AiService {
     const [messages, artifacts, tasks] = await Promise.all([
       this.prisma.aiMessage.findMany({
         where: { conversationId: conversation.id },
-        orderBy: { createdAt: "asc" },
+        orderBy: { createdAt: "desc" },
         take: 120
-      }),
+      }).then((messages) => messages.reverse()),
       this.prisma.aiArtifact.findMany({
         where: { conversationId: conversation.id },
         orderBy: { updatedAt: "desc" },
@@ -209,13 +209,14 @@ export class AiService {
   async generateArtifact(
     userId: string,
     projectId: string,
-    body: { conversationId?: string; type?: string; instruction?: string; provider?: string; density?: string; customProvider?: unknown }
+    body: { conversationId?: string; clientRequestId?: string; type?: string; instruction?: string; provider?: string; density?: string; customProvider?: unknown }
   ) {
     const timer = new TimingLogger("ai-artifact", `${projectId}:${body.type ?? "unknown"}`);
     await this.projects.assertAccess(userId, projectId, "editor");
     if (!isArtifactType(body.type)) throw new BadRequestException("Invalid AI artifact type");
     const conversation = await this.getOrCreateProjectConversation(userId, projectId, body.conversationId);
     const instruction = body.instruction?.trim() || `Generate ${artifactLabel(body.type)} for this deck.`;
+    const clientRequestId = normalizeClientRequestId(body.clientRequestId);
     const density = normalizeSlideTextDensity(body.density);
     const requestStartedAt = Date.now();
     const aiConfig = resolveAiConfig(body.provider, body.customProvider);
@@ -254,7 +255,12 @@ export class AiService {
         role: "user",
         content: instruction,
         aiTaskId: task.id,
-        metadata: { workflowAction: `generate_${body.type}`, textDensity: density, status: "running" }
+        metadata: {
+          workflowAction: `generate_${body.type}`,
+          textDensity: density,
+          status: "running",
+          ...(clientRequestId ? { clientRequestId } : {})
+        }
       }
     });
     const artifact = await this.prisma.aiArtifact.create({
@@ -495,12 +501,13 @@ export class AiService {
   async generateDeck(
     userId: string,
     projectId: string,
-    body: { conversationId?: string; planArtifactId?: string; provider?: string; density?: string; customProvider?: unknown }
+    body: { conversationId?: string; clientRequestId?: string; planArtifactId?: string; provider?: string; density?: string; customProvider?: unknown }
   ) {
     const timer = new TimingLogger("deck-generation", projectId);
     await this.projects.assertAccess(userId, projectId, "editor");
     const conversation = await this.getOrCreateProjectConversation(userId, projectId, body.conversationId);
     const aiConfig = resolveAiConfig(body.provider, body.customProvider);
+    const clientRequestId = normalizeClientRequestId(body.clientRequestId);
     const density = normalizeSlideTextDensity(body.density);
     timer.mark("auth_conversation_config", {
       conversationId: conversation.id,
@@ -592,7 +599,12 @@ export class AiService {
         role: "user",
         content: "Generate the deck slide by slide from the approved DeckPlan.",
         aiTaskId: task.id,
-        metadata: { workflowAction: "generate_deck", planArtifactId: planArtifact.id, textDensity: density }
+        metadata: {
+          workflowAction: "generate_deck",
+          planArtifactId: planArtifact.id,
+          textDensity: density,
+          ...(clientRequestId ? { clientRequestId } : {})
+        }
       }
     });
     void this.runDeckGenerationJob({
@@ -779,6 +791,7 @@ export class AiService {
     projectId: string,
     body: {
       conversationId?: string;
+      clientRequestId?: string;
       fileId?: string;
       instruction?: string;
       selectedText?: string | null;
@@ -791,6 +804,7 @@ export class AiService {
     await this.projects.assertAccess(userId, projectId, "editor");
     const instruction = body.instruction?.trim();
     if (!instruction) throw new BadRequestException("instruction is required");
+    const clientRequestId = normalizeClientRequestId(body.clientRequestId);
     const density = normalizeSlideTextDensity(body.density);
     const requestStartedAt = Date.now();
     timer.mark("auth_validate", {
@@ -851,7 +865,8 @@ export class AiService {
         metadata: {
           selectedFilePath: selectedFile?.path ?? null,
           selectedText: body.selectedText ?? null,
-          textDensity: density
+          textDensity: density,
+          ...(clientRequestId ? { clientRequestId } : {})
         }
       }
     });
@@ -2731,6 +2746,13 @@ function normalizeSlideTextDensity(input: string | undefined): SlideTextDensity 
   if (normalized === "concise") return "concise";
   if (normalized === "dense" || normalized === "complex") return "dense";
   return "balanced";
+}
+
+function normalizeClientRequestId(input: unknown): string | undefined {
+  if (typeof input !== "string") return undefined;
+  const trimmed = input.trim();
+  if (!trimmed) return undefined;
+  return trimmed.slice(0, 128);
 }
 
 function buildSlideTextDensityContext(density: SlideTextDensity) {
