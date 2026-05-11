@@ -1328,7 +1328,7 @@ async function requestAiWorkspaceRewrite(input: {
     `[timing][ai-edit-response] task=${input.taskId} finish=${completion.finishReason ?? "unknown"} response_chars=${raw.length}`
   );
   if (completion.finishReason === "length" || completion.finishReason === "max_tokens") {
-    throw new Error("AI response was cut off before complete workspace files were returned. Ask for fewer slides or increase AI_MAX_TOKENS.");
+    throw new Error("AI response was cut off before complete workspace files were returned. Ask for fewer slides or reduce detail.");
   }
 
   const parseStartedAt = Date.now();
@@ -1410,7 +1410,7 @@ async function requestAiArtifact(input: {
     `[timing][ai-artifact-response] type=${input.type} finish=${completion.finishReason ?? "unknown"} response_chars=${raw.length}`
   );
   if (completion.finishReason === "length" || completion.finishReason === "max_tokens") {
-    throw new Error("AI artifact response was cut off. Reduce detail or increase AI_MAX_TOKENS.");
+    throw new Error("AI artifact response was cut off. Reduce detail or split the request into smaller steps.");
   }
 
   const parseStartedAt = Date.now();
@@ -1653,18 +1653,47 @@ async function requestAiSlideFragment(input: {
     }
   });
 
-  const completion = await requestProviderText({
+  let completion = await requestProviderText({
     config: input.config,
     systemPrompt: buildSlideFragmentSystemPrompt(),
     messages: [{ role: "user", content: prompt }],
-    maxTokens: Math.min(input.config.maxTokens, 12000),
+    maxTokens: input.config.maxTokens,
     temperature: 0.18,
     responseFormat: "json_object",
     logLabel: `deck-slide slide=${input.slide.id}`,
     requestDetails: `slide=${input.slide.id} operator=${input.slide.analysisOperator} visual=${input.slide.recommendedVisual}`
   });
+  let usage = completion.usage;
   if (completion.finishReason === "length" || completion.finishReason === "max_tokens") {
-    throw new Error(`Slide ${input.slide.id} response was cut off before a complete fragment was returned.`);
+    console.warn(
+      `[deck-generation] slide=${input.slide.id} response cut off at ${input.config.maxTokens} tokens; retrying compact fragment`
+    );
+    completion = await requestProviderText({
+      config: input.config,
+      systemPrompt: buildSlideFragmentSystemPrompt(),
+      messages: [
+        {
+          role: "user",
+          content: JSON.stringify({
+            ...JSON.parse(prompt),
+            outputBudget: {
+              instruction:
+                "The previous response was cut off. Return a complete but compact slideHtml fragment under 6000 characters. Prefer concise semantic HTML, compact labels, and shared CSS classes. Do not include explanatory prose.",
+              maxSlideHtmlCharacters: 6000
+            }
+          })
+        }
+      ],
+      maxTokens: input.config.maxTokens,
+      temperature: 0.08,
+      responseFormat: "json_object",
+      logLabel: `deck-slide-retry slide=${input.slide.id}`,
+      requestDetails: `slide=${input.slide.id} compact_retry operator=${input.slide.analysisOperator} visual=${input.slide.recommendedVisual}`
+    });
+    usage = combineTokenUsage(usage, completion.usage);
+    if (completion.finishReason === "length" || completion.finishReason === "max_tokens") {
+      throw new Error(`Slide ${input.slide.id} response was cut off before a complete fragment was returned after retry.`);
+    }
   }
 
   const parsed = parseJsonObject(completion.content, `Slide ${input.slide.id} response`) as Record<string, unknown>;
@@ -1672,7 +1701,7 @@ async function requestAiSlideFragment(input: {
   if (!slideHtml.trim()) {
     throw new Error(`Slide ${input.slide.id} response did not include slideHtml`);
   }
-  return { slideHtml, usage: completion.usage };
+  return { slideHtml, usage };
 }
 
 function buildSlideFragmentSystemPrompt(): string {
@@ -2548,6 +2577,15 @@ function calculateCreditsMilli(usage: TokenUsage, pricing: OfficialModelPricing)
   return Math.ceil((inputUsd + outputUsd) * CREDITS_PER_USD * OFFICIAL_MODEL_MARKUP);
 }
 
+function combineTokenUsage(...usages: Array<TokenUsage | undefined>): TokenUsage | undefined {
+  const present = usages.filter((usage): usage is TokenUsage => Boolean(usage));
+  if (!present.length) return undefined;
+  const inputTokens = present.reduce((sum, usage) => sum + usage.inputTokens, 0);
+  const outputTokens = present.reduce((sum, usage) => sum + usage.outputTokens, 0);
+  const totalTokens = present.reduce((sum, usage) => sum + usage.totalTokens, 0) || inputTokens + outputTokens;
+  return { inputTokens, outputTokens, totalTokens };
+}
+
 function formatCredits(creditsMilli: number): string {
   return creditsMilli.toLocaleString("en-US", {
     minimumFractionDigits: 0,
@@ -2628,7 +2666,7 @@ function resolveAiConfig(providerOverride?: string, customProvider?: unknown): A
       isCustom: false,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
-      maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.DEEPSEEK_MAX_TOKENS)
+      maxTokens: limits.outputTokens
     };
   }
 
@@ -2644,7 +2682,7 @@ function resolveAiConfig(providerOverride?: string, customProvider?: unknown): A
       isCustom: false,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
-      maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.GEMINI_MAX_TOKENS)
+      maxTokens: limits.outputTokens
     };
   }
 
@@ -2659,7 +2697,7 @@ function resolveAiConfig(providerOverride?: string, customProvider?: unknown): A
       isCustom: false,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
-      maxTokens: resolveMaxOutputTokens(limits.outputTokens, resolveAnthropicMaxTokensEnv(resolvedProvider.anthropicModelFamily)),
+      maxTokens: limits.outputTokens,
       anthropicVersion: process.env.ANTHROPIC_VERSION || "2023-06-01",
       anthropicEffort: resolveAnthropicEffort(resolvedProvider.anthropicModelFamily, model),
       anthropicThinking: parseAnthropicThinking(process.env.ANTHROPIC_THINKING)
@@ -2675,7 +2713,7 @@ function resolveAiConfig(providerOverride?: string, customProvider?: unknown): A
     isCustom: false,
     maxInputTokens: limits.inputTokens,
     maxContextChars: tokensToApproxChars(limits.inputTokens),
-    maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.OPENAI_MAX_TOKENS)
+    maxTokens: limits.outputTokens
   };
 }
 
@@ -2722,12 +2760,6 @@ function resolveAnthropicLimits(model: string): { inputTokens: number; outputTok
   return MODEL_LIMITS.claudeSonnet46;
 }
 
-function resolveAnthropicMaxTokensEnv(modelFamily?: AnthropicModelFamily): string | undefined {
-  if (modelFamily === "opus") return process.env.ANTHROPIC_OPUS_MAX_TOKENS;
-  if (modelFamily === "sonnet") return process.env.ANTHROPIC_SONNET_MAX_TOKENS;
-  return process.env.ANTHROPIC_MAX_TOKENS;
-}
-
 function resolveAnthropicEffort(modelFamily: AnthropicModelFamily | undefined, model: string): AnthropicEffort | undefined {
   const familySpecific =
     modelFamily === "opus"
@@ -2756,11 +2788,6 @@ function parseAnthropicThinking(input: string | undefined): "adaptive" | undefin
 
 function normalizeBaseUrl(input: string): string {
   return input.replace(/\/+$/, "");
-}
-
-function resolveMaxOutputTokens(modelMaxTokens: number, providerOverride?: string): number {
-  const requested = parsePositiveInt(providerOverride, parsePositiveInt(process.env.AI_MAX_TOKENS, modelMaxTokens));
-  return Math.min(requested, modelMaxTokens);
 }
 
 function tokensToApproxChars(tokens: number): number {
@@ -2842,7 +2869,7 @@ function resolveCustomAiConfig(providerOverride: string | undefined, customProvi
       isCustom: true,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
-      maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.DEEPSEEK_MAX_TOKENS)
+      maxTokens: limits.outputTokens
     };
   }
 
@@ -2856,7 +2883,7 @@ function resolveCustomAiConfig(providerOverride: string | undefined, customProvi
       isCustom: true,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
-      maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.GEMINI_MAX_TOKENS)
+      maxTokens: limits.outputTokens
     };
   }
 
@@ -2871,7 +2898,7 @@ function resolveCustomAiConfig(providerOverride: string | undefined, customProvi
       isCustom: true,
       maxInputTokens: limits.inputTokens,
       maxContextChars: tokensToApproxChars(limits.inputTokens),
-      maxTokens: resolveMaxOutputTokens(limits.outputTokens, resolveAnthropicMaxTokensEnv(modelFamily)),
+      maxTokens: limits.outputTokens,
       anthropicVersion: process.env.ANTHROPIC_VERSION || "2023-06-01",
       anthropicEffort: resolveAnthropicEffort(modelFamily, model),
       anthropicThinking: parseAnthropicThinking(process.env.ANTHROPIC_THINKING)
@@ -2887,7 +2914,7 @@ function resolveCustomAiConfig(providerOverride: string | undefined, customProvi
     isCustom: true,
     maxInputTokens: limits.inputTokens,
     maxContextChars: tokensToApproxChars(limits.inputTokens),
-    maxTokens: resolveMaxOutputTokens(limits.outputTokens, process.env.OPENAI_MAX_TOKENS)
+    maxTokens: limits.outputTokens
   };
 }
 
