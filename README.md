@@ -12,7 +12,6 @@
 
 AI-native HTML slide workspaces for people who want serious decks as editable source files.
 
-[![License](https://img.shields.io/badge/license-Non--Commercial-blue)](./LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6)](https://www.typescriptlang.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-15-black)](https://nextjs.org/)
 [![NestJS](https://img.shields.io/badge/NestJS-10-e0234e)](https://nestjs.com/)
